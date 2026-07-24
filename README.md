@@ -1,5 +1,13 @@
 # Radius Defect Checklist — setup guide
 
+> **Already have this deployed?** You only need to do this: on GitHub, in
+> your `radius-defect-tool` repo, replace `index.html` and update the
+> `netlify` folder so it contains all three function files
+> (`submit-inspection.js`, `review.js`, `my-reports.js`) — drag the whole
+> `netlify` folder in as one object so the structure stays correct. Then
+> Netlify → Deploys → Trigger deploy. Your existing environment variables
+> and `reports/team-keys.json` don't need to change.
+
 This folder is everything needed to host the checklist tool at a real web
 address, with every submitted report automatically filed into a central
 GitHub repo you can browse any time.
@@ -48,7 +56,8 @@ Easiest way, no command line needed:
 - Open the empty `radius-defect-tool` repo on github.com
 - Click **Add file → Upload files**
 - Drag the entire contents of this folder in (`index.html`, `netlify.toml`,
-  and the `netlify` folder with `functions/submit-inspection.js` inside it)
+  and the `netlify` folder with all three files inside `netlify/functions/`:
+  `submit-inspection.js`, `review.js`, and `my-reports.js`)
 - Commit directly to `main`
 
 (If you're comfortable with git, the usual `git init / add / commit / push`
@@ -89,8 +98,35 @@ name to something memorable, e.g. `radius-checklist.netlify.app`.
 | `GITHUB_OWNER` | your GitHub username or org |
 | `GITHUB_REPO` | `radius-defect-records` |
 | `GITHUB_BRANCH` | `main` (only needed if your default branch is named differently) |
-| `SUBMIT_SECRET` | make up a passphrase — this is what you'll give your whole team |
-| `REVIEW_SECRET` | make up a **different** passphrase — give this one only to whoever is allowed to approve reports (you, and any other PM/compliance sign-off person) |
+| `REVIEW_SECRET` | a passphrase — give this only to whoever is allowed to approve reports (you, and any other PM/compliance sign-off person) |
+
+You do **not** need a `SUBMIT_SECRET` variable for a new setup — team access is now managed per-person, in a file, not a shared passphrase (see Step 5a below). `SUBMIT_SECRET` still works as a legacy fallback if you'd already set one and haven't issued individual keys yet, but there's no need to add it fresh.
+
+### Step 5a — issue each team member their own key
+
+Instead of one password for the whole team, each person gets their own — so you know exactly who submitted what, and can cut off one person's access without touching anyone else's.
+
+1. In your **`radius-defect-records`** repo (the data repo, not the tool repo), create a new file: **Add file → Create new file**
+2. Name it exactly: `reports/team-keys.json` (typing the folder with a slash creates it automatically)
+3. Paste in something like this, one entry per person, making up a unique key for each:
+
+```json
+{
+  "keys": [
+    { "name": "MG", "key": "radius-mg-7391", "active": true },
+    { "name": "Seb", "key": "radius-seb-4820", "active": true },
+    { "name": "Julie", "key": "radius-julie-1156", "active": true }
+  ]
+}
+```
+
+4. Commit to `main`
+
+Give each person **only their own key** — e.g. text MG just `radius-mg-7391`, nothing else. They paste it into "Your personal access key" on the tool, once.
+
+**To revoke someone's access:** edit this same file, set their `"active"` to `false` (or delete their whole entry), and commit. It takes effect on their very next submission — no redeploy needed, since the function reads this file fresh every time.
+
+**To add someone new:** add another entry to the list, same way.
 
 Then **trigger a redeploy** (Deploys tab → Trigger deploy) so the function
 picks up the new variables.
@@ -114,30 +150,29 @@ picks up the new variables.
 ## Step 7 — Hand it to the team
 
 Share two different things:
-- The site URL, and the **`SUBMIT_SECRET`** — give this to everyone doing
-  inspections, to paste into "Central record key" once (it's remembered on
-  that device after that)
-- The **`REVIEW_SECRET`** — give this only to whoever should be approving
-  reports (you, and anyone else who does sign-off). They paste it into
-  "Manager review key" once, on their own device, and leave the ordinary
-  "Central record key" box blank unless they also do inspections themselves.
+- The site URL — everyone gets this
+- Each person's **own individual key** from `team-keys.json` — send each
+  person only their own, not the whole list. They paste it into "Your
+  personal access key" once, on their own device.
 
-Everyone opens the same URL — the two keys just control what each person can
-see and do.
+Separately, give the **`REVIEW_SECRET`** only to whoever should be approving
+reports (you, and anyone else who does sign-off). They paste it into
+"Manager review key" once, on their own device, and leave "Your personal
+access key" blank unless they also do inspections themselves.
 
-## How the review queue works day to day
+Everyone opens the same URL — the keys just control what each person can see
+and do, and every submission is now tied to whoever's key was used, visible
+in the review queue and in `reports/index.csv`.
 
-1. Inspector finishes on site, taps **"Send to central record."** The report
-   is filed with status **Pending review**.
-2. You (or whoever holds the review key) open **"Review queue"** whenever
-   convenient — it lists every pending report: project, inspector, date,
-   defect counts.
-3. Tap **View PDF** to read it, then **Approve** or **Request changes**
-   (optionally with a note — the inspector will need to be told separately,
-   e.g. by message, since this doesn't send notifications on its own).
-4. Approved reports are marked accordingly in the registry. You still attach
-   the PDF and email the client yourself — this feature's job is only to
-   make sure nothing gets that far without you having actually looked at it.
+## How the whole loop works day to day
+
+1. Inspector finishes on site, taps **"Send to central record."** Filed as **Pending review**, tied to their own key.
+2. You open **"Review queue"** with `REVIEW_SECRET`, tap **View PDF**, then **Approve** or **Request changes**.
+3. The inspector opens **"My submissions"** on their own phone (same personal key they submitted with) — it shows only their own reports and current status.
+4. Once you've approved it, a **"Download approved PDF"** button appears for that report. They tap it, the file lands on their phone, and they attach it to an email/text to the client themselves.
+5. If a report isn't approved yet, that button simply isn't there — the file can't be pulled out early, even if someone guesses the internal job code. If you sent it back for changes, they see your note and can fix it up and resubmit under the same job.
+
+This means nothing reaches a client until you've actually looked at it and approved it — enforced by the system, not just by habit — while the inspector still does the actual sending themselves, same as before.
 
 ---
 
