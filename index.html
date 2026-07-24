@@ -187,6 +187,7 @@ textarea.notes:focus{outline:2px solid var(--steel-2);outline-offset:-1px;}
   font-size:10.5px;font-weight:700;text-align:center;flex-shrink:0;background:#f4f8f9;
 }
 .photo-btn input{display:none;}
+.cover-photo-row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start;margin-top:4px;}
 .thumb{position:relative;width:74px;height:74px;border-radius:8px;overflow:hidden;border:1px solid var(--line);flex-shrink:0;}
 .thumb img{width:100%;height:100%;object-fit:cover;display:block;}
 .thumb .kb{
@@ -198,6 +199,19 @@ textarea.notes:focus{outline:2px solid var(--steel-2);outline-offset:-1px;}
   background:rgba(27,36,48,.82);color:#fff;border:none;font-size:12px;line-height:1;
   display:flex;align-items:center;justify-content:center;padding:0;
 }
+.cover-thumb{position:relative;width:160px;height:110px;border-radius:8px;overflow:hidden;border:1px solid var(--line);flex-shrink:0;}
+.cover-thumb img{width:100%;height:100%;object-fit:cover;display:block;}
+.cover-thumb .rm{
+  position:absolute;top:4px;right:4px;width:22px;height:22px;border-radius:50%;
+  background:rgba(27,36,48,.82);color:#fff;border:none;font-size:13px;line-height:1;
+  display:flex;align-items:center;justify-content:center;padding:0;
+}
+.cover-photo-btn{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;
+  width:160px;height:110px;border:1.5px dashed var(--steel-2);border-radius:8px;color:var(--steel-2);
+  font-size:12px;font-weight:700;text-align:center;flex-shrink:0;background:#f4f8f9;
+}
+.cover-photo-btn input{display:none;}
 
 .empty-hint{color:var(--min);font-size:12.5px;padding:6px 2px;}
 
@@ -257,6 +271,10 @@ textarea.notes:focus{outline:2px solid var(--steel-2);outline-offset:-1px;}
       <div class="field"><label>Date</label><input id="m_date" type="date"></div>
       <div class="field"><label>Reviewed by (PM / Compliance)</label><input id="m_reviewer"></div>
     </div>
+    <div class="field" style="margin-top:14px;">
+      <label>Property photo <span style="font-weight:400;text-transform:none;color:#8a94a6;">(front of house — shown on the report cover)</span></label>
+      <div id="coverPhotoRow" class="cover-photo-row"></div>
+    </div>
   </div>
 
   <div class="toolbar">
@@ -311,6 +329,14 @@ textarea.notes:focus{outline:2px solid var(--steel-2);outline-offset:-1px;}
 <div class="modal-bg" id="reviewModal">
   <div class="modal" style="max-width:560px;">
     <h3>Review queue</h3>
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;">
+      <input id="reviewSearch" placeholder="Search by project or client…" style="flex:1;min-width:150px;padding:8px 10px;border:1px solid var(--line);border-radius:6px;font-size:13px;">
+      <select id="reviewFilter" style="padding:8px 10px;border:1px solid var(--line);border-radius:6px;font-size:13px;background:#fff;">
+        <option value="needs_attention" selected>Needs attention</option>
+        <option value="approved">Approved</option>
+        <option value="all">All</option>
+      </select>
+    </div>
     <div id="reviewList"></div>
     <div style="margin-top:14px;text-align:right;">
       <button class="btn btn-sm" data-action="close-review-modal">Close</button>
@@ -398,7 +424,7 @@ async function dbDelete(slug){
 }
 
 // ---------- state ----------
-function blankMeta(){ return {project:'',client:'',builder:'',inspector:'',date:'',reviewer:''}; }
+function blankMeta(){ return {project:'',client:'',builder:'',inspector:'',date:'',reviewer:'',coverPhoto:null}; }
 let state = { slug:null, meta: blankMeta(), items:{}, openSections:{} };
 let saveTimer=null;
 
@@ -471,8 +497,23 @@ function render(){
   document.getElementById('m_date').value = state.meta.date;
   document.getElementById('m_reviewer').value = state.meta.reviewer;
   document.getElementById('slugLabel').textContent = state.slug || 'no inspection saved yet';
+  renderCoverPhoto();
   renderSections();
   renderSummary();
+}
+
+function renderCoverPhoto(){
+  const row = document.getElementById('coverPhotoRow');
+  const cp = state.meta.coverPhoto;
+  row.innerHTML = `
+    <label class="cover-photo-btn">${cp ? 'Replace photo' : '+ Add photo'}
+      <input type="file" accept="image/*" capture="environment" data-action="add-cover-photo">
+    </label>
+    ${cp ? `<div class="cover-thumb">
+      <img src="${cp.dataUrl}" alt="property photo">
+      <button class="rm" data-action="remove-cover-photo">&times;</button>
+    </div>` : ''}
+  `;
 }
 
 function renderSummary(){
@@ -606,6 +647,10 @@ document.addEventListener('click', async (e)=>{
     it.photos = it.photos.filter(p=>String(p.id)!==String(t.dataset.photoid));
     renderSections(); renderSummary(); scheduleSave();
   }
+  else if(action==='remove-cover-photo'){
+    state.meta.coverPhoto = null;
+    renderCoverPhoto(); scheduleSave();
+  }
   else if(action==='new-inspection'){
     if(Object.keys(state.items).length || state.meta.project){
       if(!confirm('Start a new inspection? Anything unsaved on the current one will be lost (saved inspections are kept).')) return;
@@ -680,6 +725,7 @@ document.addEventListener('click', async (e)=>{
 
 document.addEventListener('input', (e)=>{
   const t = e.target;
+  if(t.id==='reviewSearch'){ applyReviewFilters(); return; }
   if(t.id && t.id.startsWith('m_')){
     const field = t.id.slice(2);
     state.meta[field] = t.value;
@@ -696,6 +742,7 @@ document.addEventListener('input', (e)=>{
 document.addEventListener('change', (e)=>{
   if(e.target.id==='submitKey'){ setSetting({submitKey: e.target.value}); }
   if(e.target.id==='reviewKey'){ setSetting({reviewKey: e.target.value}); }
+  if(e.target.id==='reviewFilter'){ applyReviewFilters(); }
 });
 
 document.addEventListener('change', async (e)=>{
@@ -713,6 +760,16 @@ document.addEventListener('change', async (e)=>{
     t.value='';
     renderSections(); renderSummary(); scheduleSave();
     showToast('Photo added');
+  }
+  if(t.dataset && t.dataset.action==='add-cover-photo' && t.files && t.files.length){
+    showToast('Compressing photo…');
+    try{
+      const res = await compressImage(t.files[0], 1600, 0.7);
+      state.meta.coverPhoto = Object.assign({id: Date.now()+'-'+Math.random().toString(36).slice(2)}, res);
+      renderCoverPhoto(); scheduleSave();
+      showToast('Property photo added');
+    }catch(err){ console.error(err); alert('Could not process that photo — try again.'); }
+    t.value='';
   }
   if(t.id==='importFile' && t.files && t.files[0]){
     const file = t.files[0];
@@ -761,6 +818,10 @@ function headerBlock(doc, title){
   doc.text(title, 14, 18);
   doc.setTextColor(0,0,0);
 
+  const hasPhoto = !!(state.meta.coverPhoto && state.meta.coverPhoto.dataUrl);
+  const photoW = 52, photoH = 38, photoGap = 6;
+  const metaAreaW = hasPhoto ? (W - 28 - photoW - photoGap) : (W - 28);
+
   let y = 34;
   doc.setFont('helvetica','bold'); doc.setFontSize(9);
   const rows = [
@@ -771,7 +832,7 @@ function headerBlock(doc, title){
     ['Date', state.meta.date||'—'],
     ['Reviewed by (PM / Compliance)', state.meta.reviewer||'—'],
   ];
-  const colW = (W-28)/2;
+  const colW = metaAreaW/2;
   rows.forEach((r,i)=>{
     const col = i%2, row = Math.floor(i/2);
     const x = 14 + col*colW;
@@ -781,6 +842,16 @@ function headerBlock(doc, title){
     doc.setFont('helvetica','normal'); doc.setFontSize(10); doc.setTextColor(20,20,20);
     doc.text(String(r[1]), x, ry+5);
   });
+
+  if(hasPhoto){
+    try{
+      const photoX = 14 + metaAreaW + photoGap;
+      doc.addImage(state.meta.coverPhoto.dataUrl, 'JPEG', photoX, y-6, photoW, photoH, undefined, 'FAST');
+      doc.setDrawColor(217,211,196); doc.setLineWidth(0.3);
+      doc.rect(photoX, y-6, photoW, photoH);
+    }catch(err){}
+  }
+
   return y + Math.ceil(rows.length/2)*11 + 6;
 }
 
@@ -946,25 +1017,51 @@ async function getReviewKey(){
   return (s && s.reviewKey) ? s.reviewKey.trim() : '';
 }
 
+let lastReviewList = [];
+
 async function openReviewQueue(){
   const key = await getReviewKey();
   if(!key){ alert('Paste the manager review key into the "Manager review key" box above first — ask Jason if you don\'t have it.'); return; }
   const listEl = document.getElementById('reviewList');
   listEl.innerHTML = '<div class="empty-hint">Loading…</div>';
   document.getElementById('reviewModal').classList.add('show');
+  document.getElementById('reviewFilter').value = 'needs_attention';
+  document.getElementById('reviewSearch').value = '';
   try{
     const res = await fetch('/.netlify/functions/review?list=1', { headers:{'X-Review-Key':key} });
     const j = await res.json();
     if(!res.ok) throw new Error(j.error || ('Failed to load ('+res.status+')'));
-    renderReviewList(j.list || []);
+    lastReviewList = j.list || [];
+    applyReviewFilters();
   }catch(err){
     listEl.innerHTML = `<div class="empty-hint">Could not load the review queue — ${ (err.message||err) }</div>`;
   }
 }
 
-function renderReviewList(list){
+function applyReviewFilters(){
+  const filter = document.getElementById('reviewFilter').value;
+  const search = document.getElementById('reviewSearch').value.trim().toLowerCase();
+  let list = lastReviewList;
+  if(filter === 'needs_attention') list = list.filter(r => r.status !== 'approved');
+  else if(filter === 'approved') list = list.filter(r => r.status === 'approved');
+  // 'all' — no status filter
+  if(search){
+    list = list.filter(r=>{
+      const p = ((r.meta && r.meta.project) || '').toLowerCase();
+      const c = ((r.meta && r.meta.client) || '').toLowerCase();
+      return p.includes(search) || c.includes(search);
+    });
+  }
+  renderReviewList(list, filter);
+}
+
+function renderReviewList(list, filter){
   const listEl = document.getElementById('reviewList');
-  if(!list.length){ listEl.innerHTML = '<div class="empty-hint">Nothing submitted yet.</div>'; return; }
+  if(!list.length){
+    const hint = filter === 'needs_attention' ? 'Nothing waiting on you right now — all caught up.' : 'No reports match that.';
+    listEl.innerHTML = `<div class="empty-hint">${hint}</div>`;
+    return;
+  }
   list.sort((a,b)=> new Date(b.submittedAt) - new Date(a.submittedAt));
   listEl.innerHTML = list.map(rec=>{
     const st = statusLabel(rec.status);
@@ -980,8 +1077,8 @@ function renderReviewList(list){
       ${rec.reviewNote ? `<div class="empty-hint" style="padding:0;">Note: ${rec.reviewNote}</div>` : ''}
       <div class="proj-actions">
         <button class="icon-btn" data-action="view-report-pdf" data-slug="${rec.slug}">View PDF</button>
-        <button class="icon-btn" data-action="approve-report" data-slug="${rec.slug}">Approve</button>
-        <button class="icon-btn" data-action="request-changes-report" data-slug="${rec.slug}">Request changes</button>
+        ${rec.status !== 'approved' ? `<button class="icon-btn" data-action="approve-report" data-slug="${rec.slug}">Approve</button>
+        <button class="icon-btn" data-action="request-changes-report" data-slug="${rec.slug}">Request changes</button>` : ''}
       </div>
     </div>`;
   }).join('');
