@@ -265,6 +265,7 @@ textarea.notes:focus{outline:2px solid var(--steel-2);outline-offset:-1px;}
     <button class="btn btn-steel" data-action="export-defects">Email defect report (PDF)</button>
     <button class="btn" data-action="export-full">Full checklist (PDF)</button>
     <button class="btn btn-dark" data-action="submit-central">Send to central record</button>
+    <button class="btn" data-action="open-mine">My submissions</button>
     <button class="btn" data-action="open-review">Review queue</button>
     <button class="btn btn-sm" data-action="export-json">Backup (.json)</button>
     <label class="btn btn-sm">Restore .json<input type="file" id="importFile" accept="application/json" style="display:none"></label>
@@ -272,8 +273,8 @@ textarea.notes:focus{outline:2px solid var(--steel-2);outline-offset:-1px;}
 
   <div class="card card-pad" style="padding:12px 16px;">
     <div class="field">
-      <label>Central record key <span style="font-weight:400;text-transform:none;color:#8a94a6;">(ask Jason for this once — paste it here and this device remembers it)</span></label>
-      <input id="submitKey" type="password" placeholder="paste the shared key here" autocomplete="off">
+      <label>Your personal access key <span style="font-weight:400;text-transform:none;color:#8a94a6;">(issued to you individually by Jason — used to submit reports and check on “My submissions”. Don't share it.)</span></label>
+      <input id="submitKey" type="password" placeholder="paste your own key here" autocomplete="off">
     </div>
     <div class="field" style="margin-top:10px;">
       <label>Manager review key <span style="font-weight:400;text-transform:none;color:#8a94a6;">(only needed if you're doing sign-off — leave blank otherwise)</span></label>
@@ -313,6 +314,16 @@ textarea.notes:focus{outline:2px solid var(--steel-2);outline-offset:-1px;}
     <div id="reviewList"></div>
     <div style="margin-top:14px;text-align:right;">
       <button class="btn btn-sm" data-action="close-review-modal">Close</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="mineModal">
+  <div class="modal" style="max-width:560px;">
+    <h3>My submissions</h3>
+    <div id="mineList"></div>
+    <div style="margin-top:14px;text-align:right;">
+      <button class="btn btn-sm" data-action="close-mine-modal">Close</button>
     </div>
   </div>
 </div>
@@ -639,6 +650,11 @@ document.addEventListener('click', async (e)=>{
     actOnReport(t.dataset.slug, 'request_changes', note);
   }
   else if(action==='view-report-pdf'){ viewReportPdf(t.dataset.slug); }
+  else if(action==='open-mine'){ openMySubmissions(); }
+  else if(action==='close-mine-modal'){
+    document.getElementById('mineModal').classList.remove('show');
+  }
+  else if(action==='download-mine-pdf'){ downloadMyPdf(t.dataset.slug); }
   else if(action==='load-inspection'){
     const list = await dbGetAll();
     const rec = list.find(r=>r.slug===t.dataset.slug);
@@ -888,7 +904,7 @@ async function submitCentralRecord(){
   if(!window.jspdf){ alert('This needs a working internet connection to build and send the report. Try again once you have signal.'); return; }
   const setting = await getSetting();
   const key = (setting && setting.submitKey) ? setting.submitKey.trim() : '';
-  if(!key){ alert('Ask Jason for the central record key, then paste it into the "Central record key" box above the summary — you only need to do this once on this device.'); return; }
+  if(!key){ alert('Paste your personal access key into the "Your personal access key" box above the summary first — ask Jason if you haven\'t been issued one yet. You only need to do this once on this device.'); return; }
   if(!state.meta.project){ alert('Add a project name first so the central record can file this under the right job.'); return; }
   if(!state.slug){ state.slug = slugify(state.meta.project, state.meta.date); scheduleSave(); }
 
@@ -913,7 +929,7 @@ async function submitCentralRecord(){
     });
     if(!r2.ok){ const j2 = await r2.json().catch(()=>({})); throw new Error(j2.error || 'Log update failed'); }
 
-    showToast('Sent — central record updated');
+    showToast('Sent — filed under ' + (j1.submittedBy || 'you'));
   }catch(err){
     alert('Could not send to the central record. Your inspection is still saved safely on this device — try again once you have a better connection.\n\n'+(err && err.message ? err.message : err));
   }
@@ -957,7 +973,7 @@ function renderReviewList(list){
       <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
         <div>
           <div class="proj-name">${rec.meta && rec.meta.project || '(untitled)'}</div>
-          <div class="proj-sub">${rec.meta && rec.meta.date||''} · ${rec.meta && rec.meta.inspector||'unknown inspector'} · ${sum.defects||0} defects (${sum.crit||0} crit / ${sum.maj||0} maj / ${sum.min||0} min)</div>
+          <div class="proj-sub">${rec.meta && rec.meta.date||''} · submitted by <b>${rec.submittedBy || 'unknown'}</b> ${rec.meta && rec.meta.inspector ? ('(entered as "'+rec.meta.inspector+'")') : ''} · ${sum.defects||0} defects (${sum.crit||0} crit / ${sum.maj||0} maj / ${sum.min||0} min)</div>
         </div>
         <span class="chip ${st.cls}">${st.text}</span>
       </div>
@@ -1000,6 +1016,70 @@ async function viewReportPdf(slug){
     window.open(url, '_blank');
   }catch(err){
     alert('Could not open that PDF: '+(err.message||err));
+  }
+}
+
+async function getSubmitKey(){
+  const s = await getSetting();
+  return (s && s.submitKey) ? s.submitKey.trim() : '';
+}
+
+async function openMySubmissions(){
+  const key = await getSubmitKey();
+  if(!key){ alert('Paste your personal access key into the box above the summary first.'); return; }
+  const listEl = document.getElementById('mineList');
+  listEl.innerHTML = '<div class="empty-hint">Loading…</div>';
+  document.getElementById('mineModal').classList.add('show');
+  try{
+    const res = await fetch('/.netlify/functions/my-reports', { headers:{'X-Submit-Key':key} });
+    const j = await res.json();
+    if(!res.ok) throw new Error(j.error || ('Failed to load ('+res.status+')'));
+    renderMineList(j.list || []);
+  }catch(err){
+    listEl.innerHTML = `<div class="empty-hint">Could not load your submissions — ${(err.message||err)}</div>`;
+  }
+}
+
+function renderMineList(list){
+  const listEl = document.getElementById('mineList');
+  if(!list.length){ listEl.innerHTML = '<div class="empty-hint">Nothing submitted yet under your key.</div>'; return; }
+  list.sort((a,b)=> new Date(b.submittedAt) - new Date(a.submittedAt));
+  listEl.innerHTML = list.map(rec=>{
+    const st = statusLabel(rec.status);
+    const sum = rec.summary || {};
+    const canDownload = rec.status === 'approved';
+    return `<div class="proj-row" style="flex-direction:column;align-items:stretch;gap:8px;">
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
+        <div>
+          <div class="proj-name">${rec.meta && rec.meta.project || '(untitled)'}</div>
+          <div class="proj-sub">${rec.meta && rec.meta.date||''} · ${sum.defects||0} defects (${sum.crit||0} crit / ${sum.maj||0} maj / ${sum.min||0} min)</div>
+        </div>
+        <span class="chip ${st.cls}">${st.text}</span>
+      </div>
+      ${rec.reviewNote ? `<div class="empty-hint" style="padding:0;">Reviewer note: ${rec.reviewNote}</div>` : ''}
+      <div class="proj-actions">
+        ${canDownload
+          ? `<button class="icon-btn" data-action="download-mine-pdf" data-slug="${rec.slug}">Download approved PDF</button>`
+          : `<span class="empty-hint" style="padding:0;">${rec.status==='changes_requested' ? 'Fix and resubmit from this device.' : 'Waiting on review — check back later.'}</span>`}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function downloadMyPdf(slug){
+  const key = await getSubmitKey();
+  if(!key) return;
+  try{
+    const res = await fetch('/.netlify/functions/my-reports?pdf='+encodeURIComponent(slug), { headers:{'X-Submit-Key':key} });
+    if(!res.ok){ const j = await res.json().catch(()=>({})); throw new Error(j.error||'Could not download that PDF'); }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = slug + '-defect-report.pdf';
+    a.click();
+    showToast('Downloaded — ready to attach to an email');
+  }catch(err){
+    alert('Could not download that PDF: '+(err.message||err));
   }
 }
 
