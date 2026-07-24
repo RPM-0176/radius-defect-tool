@@ -1,0 +1,1069 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Radius Defect Checklist</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<style>
+:root{
+  --ink:#1b2430;
+  --paper:#f6f4ee;
+  --paper-2:#efece2;
+  --line:#d9d3c4;
+  --ok:#3c7a5c;
+  --ok-bg:#e4efe8;
+  --defect:#a8461f;
+  --defect-bg:#f5e6dd;
+  --crit:#a8291f;
+  --maj:#c07a1e;
+  --min:#6b7280;
+  --steel:#2f4a5e;
+  --steel-2:#3d6178;
+  --font-display: ui-sans-serif, "Helvetica Neue", Arial, sans-serif;
+  --font-body: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;background:var(--paper);color:var(--ink);font-family:var(--font-body);}
+body{padding-bottom:80px;}
+::selection{background:#c9d8de;}
+button{font-family:inherit;cursor:pointer;}
+input,textarea,select{font-family:inherit;}
+a{color:var(--steel-2);}
+
+.topbar{
+  position:sticky;top:0;z-index:50;
+  background:var(--ink);color:var(--paper);
+  padding:14px 16px 12px;
+  box-shadow:0 2px 10px rgba(0,0,0,.25);
+}
+.topbar-inner{max-width:900px;margin:0 auto;}
+.brand{
+  display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;
+}
+.brand-mark{
+  font-family:var(--font-mono);font-weight:700;letter-spacing:.12em;
+  font-size:11px;color:#c8d3da;border:1px solid #46586a;padding:3px 7px;border-radius:3px;
+  text-transform:uppercase;
+}
+.brand h1{
+  font-family:var(--font-display);font-weight:800;font-size:19px;letter-spacing:-.01em;margin:0;
+}
+.brand-sub{font-size:12px;color:#9fb0bb;font-family:var(--font-mono);margin-top:2px;letter-spacing:.02em;}
+.save-pill{
+  margin-left:auto;font-size:11px;font-family:var(--font-mono);color:#a9c9b3;
+  display:flex;align-items:center;gap:6px;white-space:nowrap;
+}
+.save-dot{width:7px;height:7px;border-radius:50%;background:#4b9a70;display:inline-block;}
+.save-dot.saving{background:#c07a1e;animation:pulse 1s infinite;}
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:.35;}}
+
+.wrap{max-width:900px;margin:0 auto;padding:16px;}
+
+.card{
+  background:#fffdf9;border:1px solid var(--line);border-radius:10px;
+  margin-bottom:14px;overflow:hidden;
+}
+.card-pad{padding:16px;}
+
+.meta-grid{
+  display:grid;grid-template-columns:1fr 1fr;gap:10px 12px;
+}
+@media(max-width:520px){.meta-grid{grid-template-columns:1fr;}}
+.field label{
+  display:block;font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;
+  color:var(--min);font-weight:600;margin-bottom:4px;
+}
+.field input{
+  width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:6px;
+  background:#fff;font-size:14px;color:var(--ink);
+}
+.field input:focus{outline:2px solid var(--steel-2);outline-offset:-1px;}
+
+.toolbar{
+  display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px;
+}
+.btn{
+  border:1px solid var(--line);background:#fff;color:var(--ink);
+  padding:9px 14px;border-radius:7px;font-size:13px;font-weight:600;
+  display:inline-flex;align-items:center;gap:6px;
+}
+.btn:hover{border-color:var(--steel-2);}
+.btn:active{transform:translateY(1px);}
+.btn-dark{background:var(--ink);color:var(--paper);border-color:var(--ink);}
+.btn-steel{background:var(--steel);color:#fff;border-color:var(--steel);}
+.btn-outline-crit{border-color:var(--crit);color:var(--crit);background:#fff;}
+.btn-sm{padding:6px 10px;font-size:12px;}
+select.btn{appearance:none;-webkit-appearance:none;padding-right:26px;
+  background-image:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="10" height="6"><path d="M0 0l5 6 5-6z" fill="%231b2430"/></svg>');
+  background-repeat:no-repeat;background-position:right 10px center;
+}
+
+.summary{
+  display:grid;grid-template-columns:repeat(6,1fr);gap:1px;background:var(--line);
+  border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-bottom:14px;
+}
+@media(max-width:640px){.summary{grid-template-columns:repeat(3,1fr);}}
+.summary-cell{background:#fffdf9;padding:12px 10px;text-align:center;}
+.summary-num{font-family:var(--font-mono);font-weight:700;font-size:20px;line-height:1;}
+.summary-label{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--min);margin-top:5px;}
+.summary-cell.crit .summary-num{color:var(--crit);}
+.summary-cell.maj .summary-num{color:var(--maj);}
+.summary-cell.min .summary-num{color:var(--min);}
+.summary-cell.photos .summary-num{color:var(--steel-2);}
+
+.expand-row{display:flex;justify-content:flex-end;gap:8px;margin-bottom:8px;}
+
+.section{
+  background:#fffdf9;border:1px solid var(--line);border-radius:10px;margin-bottom:10px;overflow:hidden;
+}
+.section-head{
+  display:flex;align-items:center;gap:12px;padding:13px 15px;cursor:pointer;
+  background:var(--paper-2);user-select:none;
+}
+.section-badge{
+  font-family:var(--font-mono);font-weight:700;font-size:13px;
+  background:var(--ink);color:var(--paper);border-radius:5px;padding:3px 8px;min-width:28px;text-align:center;
+}
+.section-title{font-weight:700;font-size:14.5px;flex:1;}
+.section-meta{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--min);font-family:var(--font-mono);}
+.chip{
+  border-radius:20px;padding:2px 9px;font-size:11px;font-weight:700;font-family:var(--font-mono);
+}
+.chip-defect{background:var(--defect-bg);color:var(--defect);}
+.chip-ok{background:var(--ok-bg);color:var(--ok);}
+.chip-pending{background:#f4ecd8;color:#8a5f0e;}
+.chip-approved{background:var(--ok-bg);color:var(--ok);}
+.chip-changes{background:var(--defect-bg);color:var(--defect);}
+.chevron{transition:transform .15s ease;color:var(--min);font-size:12px;}
+.section.open .chevron{transform:rotate(90deg);}
+.section-body{display:none;}
+.section.open .section-body{display:block;}
+
+.item{
+  padding:14px 15px;border-top:1px solid var(--line);
+}
+.item-top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;}
+.item-name{font-weight:700;font-size:13.5px;}
+.item-spec{font-size:12px;color:#5b6672;margin-top:3px;line-height:1.45;max-width:520px;}
+.status-toggle{display:flex;border:1px solid var(--line);border-radius:7px;overflow:hidden;flex-shrink:0;}
+.status-btn{
+  padding:8px 14px;font-size:12px;font-weight:700;background:#fff;color:var(--min);border:none;
+  border-right:1px solid var(--line);
+}
+.status-btn:last-child{border-right:none;}
+.status-btn.active-ok{background:var(--ok);color:#fff;}
+.status-btn.active-defect{background:var(--defect);color:#fff;}
+.status-btn.active-na{background:var(--min);color:#fff;}
+
+.item-extra{
+  margin-top:12px;padding-top:12px;border-top:1px dashed var(--line);
+  display:none;
+}
+.item.is-defect .item-extra, .item.is-na .item-extra{display:block;}
+.sev-row{display:none;gap:6px;margin-bottom:10px;flex-wrap:wrap;}
+.item.is-defect .sev-row{display:flex;}
+.photo-row{display:none;gap:8px;flex-wrap:wrap;align-items:flex-start;}
+.item.is-defect .photo-row{display:flex;}
+.sev-btn{
+  padding:6px 12px;border-radius:20px;font-size:11.5px;font-weight:700;border:1.5px solid var(--line);
+  background:#fff;color:var(--min);font-family:var(--font-mono);
+}
+.sev-btn.sev-Min.active{background:var(--min);color:#fff;border-color:var(--min);}
+.sev-btn.sev-Maj.active{background:var(--maj);color:#fff;border-color:var(--maj);}
+.sev-btn.sev-Crit.active{background:var(--crit);color:#fff;border-color:var(--crit);}
+
+textarea.notes{
+  width:100%;min-height:56px;padding:8px 10px;border:1px solid var(--line);border-radius:6px;
+  font-size:13px;resize:vertical;background:#fff;margin-bottom:10px;
+}
+textarea.notes:focus{outline:2px solid var(--steel-2);outline-offset:-1px;}
+
+.photo-btn{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;
+  width:74px;height:74px;border:1.5px dashed var(--steel-2);border-radius:8px;color:var(--steel-2);
+  font-size:10.5px;font-weight:700;text-align:center;flex-shrink:0;background:#f4f8f9;
+}
+.photo-btn input{display:none;}
+.thumb{position:relative;width:74px;height:74px;border-radius:8px;overflow:hidden;border:1px solid var(--line);flex-shrink:0;}
+.thumb img{width:100%;height:100%;object-fit:cover;display:block;}
+.thumb .kb{
+  position:absolute;left:0;bottom:0;right:0;background:rgba(27,36,48,.72);color:#fff;
+  font-size:8.5px;font-family:var(--font-mono);text-align:center;padding:1px 0;
+}
+.thumb .rm{
+  position:absolute;top:2px;right:2px;width:18px;height:18px;border-radius:50%;
+  background:rgba(27,36,48,.82);color:#fff;border:none;font-size:12px;line-height:1;
+  display:flex;align-items:center;justify-content:center;padding:0;
+}
+
+.empty-hint{color:var(--min);font-size:12.5px;padding:6px 2px;}
+
+.footer-note{font-size:11.5px;color:var(--min);text-align:center;margin:18px 0 6px;line-height:1.6;}
+
+.modal-bg{
+  position:fixed;inset:0;background:rgba(27,36,48,.55);z-index:100;
+  display:none;align-items:center;justify-content:center;padding:20px;
+}
+.modal-bg.show{display:flex;}
+.modal{
+  background:#fffdf9;border-radius:12px;max-width:420px;width:100%;padding:22px;
+  max-height:80vh;overflow:auto;
+}
+.modal h3{margin:0 0 14px;font-family:var(--font-display);font-size:17px;}
+.proj-row{
+  display:flex;justify-content:space-between;align-items:center;gap:10px;
+  padding:10px 0;border-bottom:1px solid var(--line);
+}
+.proj-row:last-child{border-bottom:none;}
+.proj-name{font-weight:700;font-size:13.5px;}
+.proj-sub{font-size:11px;color:var(--min);font-family:var(--font-mono);}
+.proj-actions{display:flex;gap:6px;flex-shrink:0;}
+.icon-btn{
+  border:1px solid var(--line);background:#fff;border-radius:6px;padding:5px 9px;font-size:11.5px;font-weight:700;
+}
+
+.toast{
+  position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
+  background:var(--ink);color:var(--paper);padding:10px 18px;border-radius:8px;font-size:13px;
+  z-index:200;opacity:0;pointer-events:none;transition:opacity .25s ease;box-shadow:0 4px 16px rgba(0,0,0,.3);
+}
+.toast.show{opacity:1;}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner brand">
+    <span class="brand-mark">RADIUS PM</span>
+    <div>
+      <h1>House Defect Checklist</h1>
+      <div class="brand-sub" id="slugLabel">no inspection loaded</div>
+    </div>
+    <span class="save-pill"><span class="save-dot" id="saveDot"></span><span id="saveLabel">saved locally</span></span>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <div class="card card-pad">
+    <div class="meta-grid">
+      <div class="field"><label>Project</label><input id="m_project" placeholder="e.g. 41 Separation St, Fairfield"></div>
+      <div class="field"><label>Client / Provider</label><input id="m_client" placeholder="e.g. Aura at Home"></div>
+      <div class="field"><label>Builder</label><input id="m_builder"></div>
+      <div class="field"><label>Inspected by</label><input id="m_inspector"></div>
+      <div class="field"><label>Date</label><input id="m_date" type="date"></div>
+      <div class="field"><label>Reviewed by (PM / Compliance)</label><input id="m_reviewer"></div>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <button class="btn btn-dark" data-action="new-inspection">+ New inspection</button>
+    <button class="btn" data-action="open-load">Open saved</button>
+    <button class="btn btn-steel" data-action="export-defects">Email defect report (PDF)</button>
+    <button class="btn" data-action="export-full">Full checklist (PDF)</button>
+    <button class="btn btn-dark" data-action="submit-central">Send to central record</button>
+    <button class="btn" data-action="open-review">Review queue</button>
+    <button class="btn btn-sm" data-action="export-json">Backup (.json)</button>
+    <label class="btn btn-sm">Restore .json<input type="file" id="importFile" accept="application/json" style="display:none"></label>
+  </div>
+
+  <div class="card card-pad" style="padding:12px 16px;">
+    <div class="field">
+      <label>Central record key <span style="font-weight:400;text-transform:none;color:#8a94a6;">(ask Jason for this once — paste it here and this device remembers it)</span></label>
+      <input id="submitKey" type="password" placeholder="paste the shared key here" autocomplete="off">
+    </div>
+    <div class="field" style="margin-top:10px;">
+      <label>Manager review key <span style="font-weight:400;text-transform:none;color:#8a94a6;">(only needed if you're doing sign-off — leave blank otherwise)</span></label>
+      <input id="reviewKey" type="password" placeholder="only PM / compliance needs this" autocomplete="off">
+    </div>
+  </div>
+
+  <div class="summary" id="summary"></div>
+
+  <div class="expand-row">
+    <button class="btn btn-sm" data-action="expand-all">Expand all</button>
+    <button class="btn btn-sm" data-action="collapse-all">Collapse all</button>
+  </div>
+
+  <div id="sections"></div>
+
+  <div class="footer-note">
+    Photos are compressed on your device before saving — nothing uploads anywhere.<br>
+    Everything autosaves to this browser. Use <b>Backup (.json)</b> to move an inspection to another device or file it away.<br>
+    PDF export needs an internet connection the moment you tap it (loads the PDF engine); entering data and taking photos works fully offline.
+  </div>
+</div>
+
+<div class="modal-bg" id="loadModal">
+  <div class="modal">
+    <h3>Saved inspections</h3>
+    <div id="savedList"></div>
+    <div style="margin-top:14px;text-align:right;">
+      <button class="btn btn-sm" data-action="close-modal">Close</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="reviewModal">
+  <div class="modal" style="max-width:560px;">
+    <h3>Review queue</h3>
+    <div id="reviewList"></div>
+    <div style="margin-top:14px;text-align:right;">
+      <button class="btn btn-sm" data-action="close-review-modal">Close</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const CHECKLIST_DATA = [{"id": "01", "title": "Front / Street Approach", "items": [{"name": "Public footpath condition", "spec": "cracks, trip hazards, levels"}, {"name": "Crossover & driveway transition", "spec": "Smooth step-free transition from kerb. Step-free accessway from car park space (participant use) to dwelling entry."}, {"name": "Carparking space", "spec": "Car space ≥3800×5400mm (or AS2890.6); P4/R11 surface; ≤1:40 gradient; roofed with clear vertical clearance per AS2890.6."}, {"name": "Driveway surface", "spec": "finish, cracks, ponding"}, {"name": "Driveway drainage grates", "spec": "condition, secure, clear"}, {"name": "Step-free path from boundary", "spec": "Min 1000mm wide, crossfall ≤1:40. Step-free accessway from front boundary to entry door. Hardstanding area 2070×1540mm at max 1:40 gradient. Path gradient ≤1:40; crossfall ≤1:40."}, {"name": "Step-free path from boundary (cont.)", "spec": "No steps on accessway; level surface transitions; max 3mm or 5mm (bevelled) vertical tolerance; even & firm surface; crossfall ≤1:40."}, {"name": "Fire sprinkler valve", "spec": "Installed as per plan"}, {"name": "Fire water main tapping", "spec": "Installed as per plan"}, {"name": "Fire sprinkler system installed", "spec": "Installed throughout the ceiling"}, {"name": "FIP panel installed", "spec": "Installed as per plan"}, {"name": "ASE installed", "spec": "Installed as per plan"}, {"name": "Ramps", "spec": "1:20 grade sections: mid-landings every 15m; 600mm firm level surface on both sides of path (or kerb/wall ≥450mm); slip resistance P4 or R11."}, {"name": "Ramps – clear width", "spec": "Minimum clear width 1200mm (skirting to skirting) including all ramps."}, {"name": "Front fencing / gates", "spec": "operation, finish"}, {"name": "Letterbox & street number", "spec": "Installed, legible. Accessible path from dwelling; hardstanding 1540×2070mm at ≤1:40 in front; lockable; height 600–1100mm AFF."}]}, {"id": "02", "title": "Entry", "items": [{"name": "Undercover landing at front door", "spec": "1500×1500 clear. Level landing ≥1500×1500mm (max 1:40) on external/arrival side of entry door; enlarged for circulation per AS1428.1; threshold ramp may sit within landing. Covered roof over entire required landing at main external entry."}, {"name": "Entry threshold / ramp", "spec": "step-free, ≤5mm bevel or ≤35mm ramp"}, {"name": "Front door operation & locking", "spec": "swing, seal, deadlock"}, {"name": "Front door hardware", "spec": "Lever handle 900–1100mm AFFL. All door handles 900–1100mm above FFL (not required for fully automated doors)."}, {"name": "External paintwork at entry", "spec": "coverage, drips, touch-ups"}, {"name": "Doorbell / intercom", "spec": "installed, working"}, {"name": "Doorways – clear space", "spec": "All doors (internal & external) used by participants: min 950mm clear opening width."}]}, {"id": "03", "title": "Living / Dining / Common", "items": [{"name": "Flooring condition", "spec": "scratches, lifting, slip rating. Living/family room: free space ≥2250mm diameter clear of furniture. All internal flooring firm, even; level transitions ≤3mm or ≤5mm (bevelled) between abutting surfaces."}, {"name": "Internal paintwork – walls & ceiling", "spec": "coverage, marks, drips"}, {"name": "Cornices & plaster", "spec": "cracks, finish"}, {"name": "Skirting & architraves", "spec": "gaps, finish"}, {"name": "Windows – operation & locks", "spec": "Window sills in living areas and ≥1 sill in each participant bedroom ≤1000mm above FFL. Window controls in participant bedrooms 600–1100mm above FFL (accessible reach zone). All windows lockable."}, {"name": "Windows & blinds", "spec": "Power & control cabling (capped GPO acceptable) at window head in bedrooms & living areas for future blind automation."}, {"name": "Power points & switches", "spec": "secure, working, heights. Light switches 900–1100mm AFF; horizontally aligned with door handle at room entry. GPOs 600–1100mm AFF. Light & GPO switches: rocker, toggle or push-pad; ≥35mm width (exceptions: behind fixed appliances; capped GPOs at window heads)."}, {"name": "Lighting", "spec": "all fittings working. Dimmable lighting switches in living areas and bedrooms."}, {"name": "Heating & cooling", "spec": "Reverse-cycle A/C to all living areas and bedrooms; control panels 900–1100mm AFF, ≥500mm from internal corner."}, {"name": "Fire safety – smoke alarms", "spec": "Smoke alarms (home-environment style) in all bedrooms and living spaces."}]}, {"id": "04", "title": "Kitchen", "items": [{"name": "Cabinetry – doors, drawers & overheads", "spec": "open & close, alignment, soft-close. Cabinet hardware: D-pull handles (top of below-bench, bottom of overhead), OR ≥20mm overhead lip, OR push-to-release mechanisms."}, {"name": "Cabinetry – pantry", "spec": "Wheelchair-accessible pantry provided."}, {"name": "Benchtop finish & edges", "spec": "chips, joins, overhang. Adjustable height 1020mm to 720mm; 600mm depth min. 900mm clear space from edge to cooktop. Accessible benchtop ≥600mm depth abutting both cooktop and oven (latch side). Clear space ≥900mm(W)×440mm(D) below; top surface 900×600mm clear of GPOs & fixtures."}, {"name": "Height adjustable benchtop", "spec": "≥900×440mm clear underneath; adjustable 720mm–1020mm clear space from FFL. Confirmation from builder/kitchen installer required if adjustable by technician."}, {"name": "Task lighting above benchtops", "spec": "≥300 lux at max 1500mm intervals directly over bench surfaces"}, {"name": "Clearances", "spec": "≥1550mm clearance in front of fixed benches and appliances (from leading edge, excl. handles)."}, {"name": "Tap & tap handle", "spec": "connected, lever ≤300mm from edge"}, {"name": "Sink & plumbing", "spec": "no leaks, drainage"}, {"name": "Appliances", "spec": "Fixed cooktop (with rangehood), built-in oven, sink with tap, dishwasher all provided."}, {"name": "Cooktop", "spec": "Electric or induction, operation, front or side controls, must be >300mm from any internal corner/wall clearances"}, {"name": "Wall oven", "spec": "Side-hinged door, latch side next to accessible benchtop; door handle part 600–1100mm AFF; ≥1 shelf on telescopic rails."}, {"name": "Dishwasher", "spec": "connected, no leaks. Drawer style dishwasher only."}, {"name": "Rangehood", "spec": "operation, ducting"}, {"name": "Splashback / tiling", "spec": "grout, silicone, finish"}, {"name": "Power points", "spec": "≥1 double GPO within 300mm of benchtop front edge, ≤1100mm AFF, adjacent to ≥600mm deep bench."}, {"name": "Fire safety – smoke alarms", "spec": "Smoke alarms (home-environment style) in all bedrooms and living spaces."}]}, {"id": "05", "title": "Laundry", "items": [{"name": "Cabinetry & trough", "spec": "doors, finish, knee clearance. Separate laundry sink/tub with taps provided (even if bathroom combined; must be separate from basin)."}, {"name": "Cabinetry clearance", "spec": "≥1550mm clearance in front of fixed benches and appliances."}, {"name": "Tap & tap handle", "spec": "connected, lever ≤300mm from edge. Lever or sensor tapware at laundry sink; operable part ≤300mm from trough/bench edge."}, {"name": "Washer taps & drainage", "spec": "connected, no leaks"}, {"name": "Flooring & waterproofing", "spec": "falls to waste, no ponding"}, {"name": "Door operation", "spec": "950mm clear, swing"}]}, {"id": "06", "title": "Hallway / Corridors", "items": [{"name": "Flooring condition", "spec": "even, slip rating. All internal flooring firm, even; level transitions ≤3mm or ≤5mm (bevelled) between abutting surfaces."}, {"name": "Hallways & corridors width", "spec": "Internal corridors ≥1200mm clear width (skirting to skirting). Corridor widths comply with AS1428.1 door circulation space requirements (min 1200mm where AS1428.1 requires less)."}, {"name": "Paintwork", "spec": "coverage, marks"}, {"name": "Handrails (if applicable)", "spec": "secure, height"}, {"name": "Lighting & switches", "spec": "working, heights. Dimmable lighting switches in living areas and bedrooms."}, {"name": "Doorways operation", "spec": "clear opening, swing"}, {"name": "Fire safety – smoke alarms", "spec": "Smoke alarms (home-environment style) in all bedrooms and living spaces."}]}, {"id": "07", "title": "Participant Bedroom 1", "items": [{"name": "Door operation & locking", "spec": "swing, privacy lock"}, {"name": "Paintwork", "spec": "coverage, marks"}, {"name": "Flooring", "spec": "finish, transitions. All internal flooring firm, even; level transitions ≤3mm or ≤5mm (bevelled) between abutting surfaces."}, {"name": "Windows & blinds", "spec": "Power & control cabling (capped GPO acceptable) at window head in bedrooms & living areas for future blind automation."}, {"name": "Windows – locks & furnishings", "spec": "operation, sill ≤1000mm. Window sills ≤1000mm above FFL. Window controls in participant bedrooms 600–1100mm above FFL (accessible reach zone). All windows lockable."}, {"name": "Built-in robe – doors & fittings", "spec": "runners, shelves, rail. Built-in robe ≥1400mm wide within bedroom footprint (not counting robe area in room size); ≥1540mm clear space in front."}, {"name": "Power points & switches", "spec": "counts & heights per spec. 3× double GPO on bed-head wall; ≥1× double GPO on opposite wall."}, {"name": "Ceiling hoist point / track", "spec": "finish, structural, GPO 2500mm"}, {"name": "Circulation space", "spec": "Room accommodates queen bed (1530×2100mm); circulation: ≥1540mm on one side, ≥1000mm on other two sides."}, {"name": "Door circulation clearance", "spec": "Internal door circulation 1540(W)×1450(D)mm clear of bed; external circulation per AS1428.1 (min 1200mm skirting to skirting); ensuite/balcony door spaces clear of bed."}, {"name": "Lighting", "spec": "fittings working. Dimmable lighting switches in living areas and bedrooms."}, {"name": "Heating & cooling", "spec": "Reverse-cycle A/C to all living areas and bedrooms; control panels 900–1100mm AFF, ≥500mm from internal corner."}, {"name": "Fire safety – smoke alarms", "spec": "Smoke alarms (home-environment style) in all bedrooms and living spaces."}]}, {"id": "08", "title": "Participant Ensuite 1", "items": [{"name": "Waterproofing – no leaks", "spec": "falls, membrane evidence. Full internal wall reinforcement (≥12mm sheet) FFL to ≥2100mm. Builder's letter required."}, {"name": "Shower – hobless fall", "spec": "gradient 1:60–1:80, no ponding"}, {"name": "Shower rail / curtain rail", "spec": "installed 1160×1100. Corner shower ≥1160×1100mm; shower curtain rail around full shower area (no horizontal grabrail unless OT/physio letter); vertical grabrail only (c/l 580–600mm from wall, bottom 1000–1100mm AFF); water outlet 700±5mm AFF centred under grabrail; lever mixer 900–1100mm AFF; lever 300–800mm from corner."}, {"name": "Grab rail", "spec": "secured, correct spec (AS1428.1)"}, {"name": "Tapware & mixer", "spec": "operation, no leaks. Lever/sensor tap ≤300mm from basin edge – unobstructed, not hitting mirror."}, {"name": "Basin & vanity", "spec": "height, knee clearance, seal. Basin ≥430mm depth; AS1428.1 circulation; 800–830mm to top and 720mm knee/toe clearance underneath. Lever/sensor tap ≤300mm from basin edge."}, {"name": "Toilet operation", "spec": "flush, offset ≥900mm, seal. WC: c/l 450–460mm to side wall; front edge 800±10mm from back wall; ≥600mm clear of cistern; 1900×2300mm circulation; flushing controls proud of surface. No grabrails unless OT/physio letter provided."}, {"name": "Tiling / grout / silicone", "spec": "finish, gaps"}, {"name": "Floor waste & drainage", "spec": "clear, positioned"}, {"name": "Exhaust fan", "spec": "operation"}, {"name": "Mirror & accessories", "spec": "installed, secure"}]}, {"id": "09", "title": "Participant Bedroom 2", "items": [{"name": "Door operation & locking", "spec": "swing, privacy lock"}, {"name": "Paintwork", "spec": "coverage, marks"}, {"name": "Flooring", "spec": "finish, transitions. All internal flooring firm, even; level transitions ≤3mm or ≤5mm (bevelled) between abutting surfaces."}, {"name": "Windows – locks & furnishings", "spec": "operation, sill ≤1000mm. Window sills ≤1000mm above FFL. Window controls in participant bedrooms 600–1100mm above FFL (accessible reach zone). All windows lockable."}, {"name": "Windows & blinds", "spec": "Power & control cabling (capped GPO acceptable) at window head in bedrooms & living areas for future blind automation."}, {"name": "Built-in robe – doors & fittings", "spec": "runners, shelves, rail. Built-in robe ≥1400mm wide within bedroom footprint (not counting robe area in room size); ≥1540mm clear space in front."}, {"name": "Power points & switches", "spec": "counts & heights per spec. 3× double GPO on bed-head wall; ≥1× double GPO on opposite wall."}, {"name": "Ceiling hoist point / track", "spec": "finish, structural, GPO 2500mm"}, {"name": "Circulation space", "spec": "Room accommodates queen bed (1530×2100mm); circulation: ≥1540mm on one side, ≥1000mm on other two sides."}, {"name": "Door circulation clearance", "spec": "Internal door circulation 1540(W)×1450(D)mm clear of bed; external circulation per AS1428.1 (min 1200mm skirting to skirting); ensuite/balcony door spaces clear of bed."}, {"name": "Lighting", "spec": "fittings working. Dimmable lighting switches in living areas and bedrooms."}, {"name": "Heating & cooling", "spec": "Reverse-cycle A/C to all living areas and bedrooms; control panels 900–1100mm AFF, ≥500mm from internal corner."}, {"name": "Fire safety – smoke alarms", "spec": "Smoke alarms (home-environment style) in all bedrooms and living spaces."}]}, {"id": "10", "title": "Participant Ensuite 2", "items": [{"name": "Waterproofing – no leaks", "spec": "falls, membrane evidence. Full internal wall reinforcement (≥12mm sheet) FFL to ≥2100mm. Builder's letter required."}, {"name": "Shower – hobless fall", "spec": "gradient 1:60–1:80, no ponding"}, {"name": "Shower rail / curtain rail", "spec": "installed 1160×1100"}, {"name": "Grab rail", "spec": "secured, correct spec (AS1428.1)"}, {"name": "Tapware & mixer", "spec": "operation, no leaks"}, {"name": "Basin & vanity", "spec": "height, knee clearance, seal"}, {"name": "Toilet operation", "spec": "flush, offset ≥900mm, seal"}, {"name": "Tiling / grout / silicone", "spec": "finish, gaps"}, {"name": "Floor waste & drainage", "spec": "clear, positioned"}, {"name": "Exhaust fan", "spec": "operation"}, {"name": "Mirror & accessories", "spec": "installed, secure"}]}, {"id": "11", "title": "Participant Bedroom 3", "items": [{"name": "Door operation & locking", "spec": "swing, privacy lock"}, {"name": "Paintwork", "spec": "coverage, marks"}, {"name": "Flooring", "spec": "finish, transitions. All internal flooring firm, even; level transitions ≤3mm or ≤5mm (bevelled) between abutting surfaces."}, {"name": "Windows – locks & furnishings", "spec": "operation, sill ≤1000mm. Window sills ≤1000mm above FFL. Window controls in participant bedrooms 600–1100mm above FFL (accessible reach zone). All windows lockable."}, {"name": "Windows & blinds", "spec": "Power & control cabling (capped GPO acceptable) at window head in bedrooms & living areas for future blind automation."}, {"name": "Built-in robe – doors & fittings", "spec": "runners, shelves, rail"}, {"name": "Power points & switches", "spec": "counts & heights per spec"}, {"name": "Ceiling hoist point / track", "spec": "finish, structural, GPO 2500mm"}, {"name": "Lighting", "spec": "fittings working. Dimmable lighting switches in living areas and bedrooms."}, {"name": "Heating & cooling", "spec": "Reverse-cycle A/C to all living areas and bedrooms; control panels 900–1100mm AFF, ≥500mm from internal corner."}, {"name": "Fire safety – smoke alarms", "spec": "Smoke alarms (home-environment style) in all bedrooms and living spaces."}]}, {"id": "12", "title": "Participant Ensuite 3", "items": [{"name": "Waterproofing – no leaks", "spec": "falls, membrane evidence. Full internal wall reinforcement (≥12mm sheet) FFL to ≥2100mm. Builder's letter required."}, {"name": "Shower – hobless fall", "spec": "gradient 1:60–1:80, no ponding"}, {"name": "Shower rail / curtain rail", "spec": "installed 1160×1100"}, {"name": "Grab rail", "spec": "secured, correct spec (AS1428.1)"}, {"name": "Tapware & mixer", "spec": "operation, no leaks"}, {"name": "Basin & vanity", "spec": "height, knee clearance, seal"}, {"name": "Toilet operation", "spec": "flush, offset ≥900mm, seal"}, {"name": "Tiling / grout / silicone", "spec": "finish, gaps"}, {"name": "Floor waste & drainage", "spec": "clear, positioned"}, {"name": "Exhaust fan", "spec": "operation"}, {"name": "Mirror & accessories", "spec": "installed, secure"}]}, {"id": "13", "title": "OOA Bedroom", "items": [{"name": "Door operation & locking", "spec": "swing, privacy lock"}, {"name": "Paintwork", "spec": "coverage, marks"}, {"name": "Flooring", "spec": "finish, transitions. All internal flooring firm, even; level transitions ≤3mm or ≤5mm (bevelled) between abutting surfaces."}, {"name": "Windows – locks & furnishings", "spec": "operation, sill, seals"}, {"name": "Built-in robe / storage", "spec": "doors, runners, shelves"}, {"name": "Power points & switches", "spec": "secure, working, heights"}, {"name": "Comms / call point (if specified)", "spec": "installed, working"}, {"name": "Lighting", "spec": "fittings working"}, {"name": "Heating & cooling", "spec": "Reverse-cycle A/C to all living areas and bedrooms; control panels 900–1100mm AFF, ≥500mm from internal corner."}, {"name": "Fire safety – smoke alarms", "spec": "Smoke alarms (home-environment style) in all bedrooms and living spaces."}]}, {"id": "14", "title": "OOA Ensuite", "items": [{"name": "Waterproofing – no leaks", "spec": "falls, membrane evidence"}, {"name": "Shower – operation & fall", "spec": "no ponding, screen/seal"}, {"name": "Tapware & mixer", "spec": "operation, no leaks"}, {"name": "Basin & vanity", "spec": "seal, fixings"}, {"name": "Toilet operation", "spec": "flush, seal"}, {"name": "Tiling / grout / silicone", "spec": "finish, gaps"}, {"name": "Floor waste & drainage", "spec": "clear, positioned"}, {"name": "Exhaust fan", "spec": "operation"}, {"name": "Mirror & accessories", "spec": "installed, secure"}]}, {"id": "15", "title": "Powder Room (PWD)", "items": [{"name": "Door operation", "spec": "950mm clear opening"}, {"name": "WC operation", "spec": "flush, offset ≥900mm"}, {"name": "Basin & tapware", "spec": "operation, no leaks"}, {"name": "Tiling & finishes", "spec": "grout, silicone"}]}, {"id": "16", "title": "Rear / Alfresco / Outdoor", "items": [{"name": "Step-free threshold to alfresco", "spec": "level transition from living"}, {"name": "Rear door & locking (incl. sliding)", "spec": "operation, 950mm clear, lock. Door handles comply with AS1428.1 (shape, setback 35–45mm from door face; 60mm setback to frame). Snibs ≥45mm length. Provide photo evidence of all lever handle setbacks."}, {"name": "Alfresco flooring / decking", "spec": "finish, falls"}, {"name": "Private open space", "spec": "accessible, finished"}, {"name": "External paintwork – rear", "spec": "coverage, drips"}, {"name": "Clothesline", "spec": "installed, accessible"}]}, {"id": "17", "title": "External / Services / Roof", "items": [{"name": "Downpipes & drainage", "spec": "condition, clean, no paint over"}, {"name": "Gutters", "spec": "clear, secure, falls"}, {"name": "External walls / render / cladding", "spec": "finish, cracks"}, {"name": "Roof & flashings (visible)", "spec": "tiles/sheets, flashings"}, {"name": "Hot water system", "spec": "installed, operation"}, {"name": "Meter box / electrical", "spec": "labelled, secure"}, {"name": "Air conditioning units", "spec": "installed, operation"}, {"name": "Site drainage / stormwater", "spec": "grates, pits, no ponding"}, {"name": "Boundary fencing & gates", "spec": "condition, gates operate"}]}];
+
+// ---------- IndexedDB persistence ----------
+const DB_NAME = 'radius_defect_checklist';
+const STORE = 'inspections';
+const SETTINGS_STORE = 'settings';
+function openDB(){
+  return new Promise((resolve,reject)=>{
+    const req = indexedDB.open(DB_NAME, 2);
+    req.onupgradeneeded = e => {
+      const db = e.target.result;
+      if(!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE, {keyPath:'slug'});
+      if(!db.objectStoreNames.contains(SETTINGS_STORE)) db.createObjectStore(SETTINGS_STORE, {keyPath:'key'});
+    };
+    req.onsuccess = e => resolve(e.target.result);
+    req.onerror = e => reject(e.target.error);
+  });
+}
+async function getSetting(){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const tx = db.transaction(SETTINGS_STORE,'readonly');
+    const req = tx.objectStore(SETTINGS_STORE).get('device');
+    req.onsuccess = ()=>resolve(req.result);
+    req.onerror = e=>reject(e.target.error);
+  });
+}
+async function setSetting(patch){
+  const cur = (await getSetting()) || {key:'device'};
+  const updated = Object.assign({}, cur, patch, {key:'device'});
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const tx = db.transaction(SETTINGS_STORE,'readwrite');
+    tx.objectStore(SETTINGS_STORE).put(updated);
+    tx.oncomplete = ()=>resolve();
+    tx.onerror = e=>reject(e.target.error);
+  });
+}
+async function dbPut(record){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const tx = db.transaction(STORE,'readwrite');
+    tx.objectStore(STORE).put(record);
+    tx.oncomplete = ()=>resolve();
+    tx.onerror = e=>reject(e.target.error);
+  });
+}
+async function dbGetAll(){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const tx = db.transaction(STORE,'readonly');
+    const req = tx.objectStore(STORE).getAll();
+    req.onsuccess = ()=>resolve(req.result || []);
+    req.onerror = e=>reject(e.target.error);
+  });
+}
+async function dbDelete(slug){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const tx = db.transaction(STORE,'readwrite');
+    tx.objectStore(STORE).delete(slug);
+    tx.oncomplete = ()=>resolve();
+    tx.onerror = e=>reject(e.target.error);
+  });
+}
+
+// ---------- state ----------
+function blankMeta(){ return {project:'',client:'',builder:'',inspector:'',date:'',reviewer:''}; }
+let state = { slug:null, meta: blankMeta(), items:{}, openSections:{} };
+let saveTimer=null;
+
+function slugify(project, date){
+  const base = (project||'untitled').toLowerCase().trim().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'');
+  return (base||'untitled') + '__' + (date||Date.now());
+}
+
+function itemKey(sIdx,iIdx){ return CHECKLIST_DATA[sIdx].id + '-' + iIdx; }
+
+function ensureItem(key){
+  if(!state.items[key]) state.items[key] = {status:null, severity:'Maj', notes:'', photos:[]};
+  return state.items[key];
+}
+
+function scheduleSave(){
+  const dot = document.getElementById('saveDot');
+  const label = document.getElementById('saveLabel');
+  dot.classList.add('saving'); label.textContent = 'saving…';
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async ()=>{
+    if(!state.meta.project && !Object.keys(state.items).some(k=>state.items[k].status)){
+      dot.classList.remove('saving'); label.textContent='not saved yet';
+      return;
+    }
+    if(!state.slug) state.slug = slugify(state.meta.project, state.meta.date);
+    await dbPut({slug: state.slug, meta: state.meta, items: state.items, updatedAt: Date.now()});
+    dot.classList.remove('saving'); label.textContent='saved locally';
+    document.getElementById('slugLabel').textContent = state.slug;
+  }, 500);
+}
+
+// ---------- image compression ----------
+function compressImage(file, maxDim, quality){
+  return new Promise((resolve,reject)=>{
+    const reader = new FileReader();
+    reader.onerror = ()=>reject(reader.error);
+    reader.onload = e=>{
+      const img = new Image();
+      img.onerror = ()=>reject(new Error('image load failed'));
+      img.onload = ()=>{
+        let w = img.width, h = img.height;
+        if(w>h){ if(w>maxDim){ h = Math.round(h*maxDim/w); w = maxDim; } }
+        else { if(h>maxDim){ w = Math.round(w*maxDim/h); h = maxDim; } }
+        const canvas = document.createElement('canvas');
+        canvas.width=w; canvas.height=h;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#fff'; ctx.fillRect(0,0,w,h);
+        ctx.drawImage(img,0,0,w,h);
+        const dataUrl = canvas.toDataURL('image/jpeg', quality);
+        resolve({dataUrl, origBytes:file.size, compBytes: Math.round(dataUrl.length*0.75)});
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function fmtKB(bytes){
+  if(bytes>1024*1024) return (bytes/1024/1024).toFixed(1)+'MB';
+  return Math.round(bytes/1024)+'KB';
+}
+
+// ---------- rendering ----------
+function render(){
+  document.getElementById('m_project').value = state.meta.project;
+  document.getElementById('m_client').value = state.meta.client;
+  document.getElementById('m_builder').value = state.meta.builder;
+  document.getElementById('m_inspector').value = state.meta.inspector;
+  document.getElementById('m_date').value = state.meta.date;
+  document.getElementById('m_reviewer').value = state.meta.reviewer;
+  document.getElementById('slugLabel').textContent = state.slug || 'no inspection saved yet';
+  renderSections();
+  renderSummary();
+}
+
+function renderSummary(){
+  let checked=0, defects=0, crit=0, maj=0, min=0, na=0, photos=0, compBytes=0, origBytes=0;
+  const total = CHECKLIST_DATA.reduce((a,s)=>a+s.items.length,0);
+  Object.values(state.items).forEach(it=>{
+    if(it.status){ checked++; }
+    if(it.status==='defect'){
+      defects++;
+      if(it.severity==='Crit') crit++; else if(it.severity==='Maj') maj++; else min++;
+    }
+    if(it.status==='na'){ na++; }
+    (it.photos||[]).forEach(p=>{ photos++; compBytes+=p.compBytes||0; origBytes+=p.origBytes||0; });
+  });
+  const el = document.getElementById('summary');
+  el.innerHTML = `
+    <div class="summary-cell"><div class="summary-num">${checked}/${total}</div><div class="summary-label">Checked</div></div>
+    <div class="summary-cell"><div class="summary-num" style="color:var(--defect)">${defects}</div><div class="summary-label">Defects</div></div>
+    <div class="summary-cell crit"><div class="summary-num">${crit}</div><div class="summary-label">Critical</div></div>
+    <div class="summary-cell maj"><div class="summary-num">${maj}</div><div class="summary-label">Major</div></div>
+    <div class="summary-cell min"><div class="summary-num">${min}</div><div class="summary-label">Minor</div></div>
+    <div class="summary-cell"><div class="summary-num" style="color:var(--min)">${na}</div><div class="summary-label">N/A</div></div>
+  `;
+  if(photos>0){
+    el.innerHTML += `<div class="summary-cell photos" style="grid-column:1/-1;display:flex;justify-content:center;gap:18px;align-items:center;">
+      <div><span class="summary-num" style="font-size:15px">${photos}</span> <span class="summary-label">photos</span></div>
+      <div style="font-family:var(--font-mono);font-size:11.5px;color:var(--steel-2)">${fmtKB(compBytes)} compressed${origBytes?(' — was '+fmtKB(origBytes)):''}</div>
+    </div>`;
+  }
+}
+
+function renderSections(){
+  const wrap = document.getElementById('sections');
+  wrap.innerHTML = CHECKLIST_DATA.map((section, sIdx)=>{
+    const isOpen = !!state.openSections[section.id];
+    let defectCount=0, okCount=0, naCount=0;
+    section.items.forEach((_,iIdx)=>{
+      const it = state.items[itemKey(sIdx,iIdx)];
+      if(it && it.status==='defect') defectCount++;
+      if(it && it.status==='ok') okCount++;
+      if(it && it.status==='na') naCount++;
+    });
+    const itemsHtml = section.items.map((item,iIdx)=>{
+      const key = itemKey(sIdx,iIdx);
+      const it = state.items[key] || {status:null,severity:'Maj',notes:'',photos:[]};
+      const isDefect = it.status==='defect';
+      const isNA = it.status==='na';
+      const photosHtml = (it.photos||[]).map(p=>`
+        <div class="thumb">
+          <img src="${p.dataUrl}" alt="defect photo">
+          <div class="kb">${fmtKB(p.compBytes)}</div>
+          <button class="rm" data-action="remove-photo" data-key="${key}" data-photoid="${p.id}">&times;</button>
+        </div>`).join('');
+      return `
+      <div class="item ${isDefect?'is-defect':''} ${isNA?'is-na':''}" data-key="${key}">
+        <div class="item-top">
+          <div>
+            <div class="item-name">${item.name}</div>
+            <div class="item-spec">${item.spec}</div>
+          </div>
+          <div class="status-toggle">
+            <button class="status-btn ${it.status==='ok'?'active-ok':''}" data-action="set-status" data-key="${key}" data-value="ok">OK</button>
+            <button class="status-btn ${it.status==='na'?'active-na':''}" data-action="set-status" data-key="${key}" data-value="na">N/A</button>
+            <button class="status-btn ${it.status==='defect'?'active-defect':''}" data-action="set-status" data-key="${key}" data-value="defect">Defect</button>
+          </div>
+        </div>
+        <div class="item-extra">
+          <div class="sev-row">
+            ${['Min','Maj','Crit'].map(sv=>`<button class="sev-btn sev-${sv} ${it.severity===sv?'active':''}" data-action="set-severity" data-key="${key}" data-value="${sv}">${sv==='Min'?'Minor':sv==='Maj'?'Major':'Critical'}</button>`).join('')}
+          </div>
+          <textarea class="notes" placeholder="${it.status==='na' ? 'Why N/A? e.g. frame stage — not yet installed' : 'Notes…'}" data-action="set-notes" data-key="${key}">${it.notes||''}</textarea>
+          <div class="photo-row">
+            <label class="photo-btn">+ Photo
+              <input type="file" accept="image/*" capture="environment" multiple data-action="add-photo" data-key="${key}">
+            </label>
+            ${photosHtml}
+          </div>
+        </div>
+      </div>`;
+    }).join('');
+
+    return `
+    <div class="section ${isOpen?'open':''}" data-section="${section.id}">
+      <div class="section-head" data-action="toggle-section" data-section="${section.id}">
+        <span class="section-badge">${section.id}</span>
+        <span class="section-title">${section.title}</span>
+        <span class="section-meta">
+          ${defectCount>0?`<span class="chip chip-defect">${defectCount} defect${defectCount>1?'s':''}</span>`:''}
+          ${okCount>0?`<span class="chip chip-ok">${okCount} ok</span>`:''}
+          ${naCount>0?`<span class="chip" style="background:#eceef0;color:var(--min);">${naCount} n/a</span>`:''}
+          <span>${section.items.length} items</span>
+        </span>
+        <span class="chevron">▸</span>
+      </div>
+      <div class="section-body">${itemsHtml}</div>
+    </div>`;
+  }).join('');
+}
+
+// ---------- events ----------
+document.addEventListener('click', async (e)=>{
+  const t = e.target.closest('[data-action]');
+  if(!t) return;
+  const action = t.dataset.action;
+
+  if(action==='toggle-section'){
+    const id = t.closest('[data-section]').dataset.section;
+    state.openSections[id] = !state.openSections[id];
+    renderSections();
+  }
+  else if(action==='expand-all'){
+    CHECKLIST_DATA.forEach(s=>state.openSections[s.id]=true);
+    renderSections();
+  }
+  else if(action==='collapse-all'){
+    CHECKLIST_DATA.forEach(s=>state.openSections[s.id]=false);
+    renderSections();
+  }
+  else if(action==='set-status'){
+    const it = ensureItem(t.dataset.key);
+    it.status = (it.status===t.dataset.value) ? null : t.dataset.value;
+    renderSections(); renderSummary(); scheduleSave();
+  }
+  else if(action==='set-severity'){
+    const it = ensureItem(t.dataset.key);
+    it.severity = t.dataset.value;
+    renderSections(); renderSummary(); scheduleSave();
+  }
+  else if(action==='remove-photo'){
+    const it = ensureItem(t.dataset.key);
+    it.photos = it.photos.filter(p=>String(p.id)!==String(t.dataset.photoid));
+    renderSections(); renderSummary(); scheduleSave();
+  }
+  else if(action==='new-inspection'){
+    if(Object.keys(state.items).length || state.meta.project){
+      if(!confirm('Start a new inspection? Anything unsaved on the current one will be lost (saved inspections are kept).')) return;
+    }
+    state = {slug:null, meta: blankMeta(), items:{}, openSections:{}};
+    render();
+    showToast('New inspection started');
+  }
+  else if(action==='open-load'){
+    const list = await dbGetAll();
+    const el = document.getElementById('savedList');
+    if(!list.length){ el.innerHTML = '<div class="empty-hint">No saved inspections on this device yet.</div>'; }
+    else{
+      list.sort((a,b)=>b.updatedAt-a.updatedAt);
+      el.innerHTML = list.map(rec=>{
+        const d = new Date(rec.updatedAt);
+        const defectCount = Object.values(rec.items||{}).filter(i=>i.status==='defect').length;
+        return `<div class="proj-row">
+          <div>
+            <div class="proj-name">${rec.meta.project || '(untitled)'}</div>
+            <div class="proj-sub">${rec.meta.date||''} · ${defectCount} defects · saved ${d.toLocaleDateString()} ${d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</div>
+          </div>
+          <div class="proj-actions">
+            <button class="icon-btn" data-action="load-inspection" data-slug="${rec.slug}">Open</button>
+            <button class="icon-btn" data-action="delete-inspection" data-slug="${rec.slug}">Delete</button>
+          </div>
+        </div>`;
+      }).join('');
+    }
+    document.getElementById('loadModal').classList.add('show');
+  }
+  else if(action==='close-modal'){
+    document.getElementById('loadModal').classList.remove('show');
+  }
+  else if(action==='open-review'){ openReviewQueue(); }
+  else if(action==='close-review-modal'){
+    document.getElementById('reviewModal').classList.remove('show');
+  }
+  else if(action==='approve-report'){ actOnReport(t.dataset.slug, 'approve'); }
+  else if(action==='request-changes-report'){
+    const note = prompt('Optional note for the inspector on what needs fixing:') || '';
+    actOnReport(t.dataset.slug, 'request_changes', note);
+  }
+  else if(action==='view-report-pdf'){ viewReportPdf(t.dataset.slug); }
+  else if(action==='load-inspection'){
+    const list = await dbGetAll();
+    const rec = list.find(r=>r.slug===t.dataset.slug);
+    if(rec){
+      state = {slug:rec.slug, meta: Object.assign(blankMeta(),rec.meta), items:rec.items||{}, openSections:{}};
+      document.getElementById('loadModal').classList.remove('show');
+      render();
+      showToast('Inspection loaded');
+    }
+  }
+  else if(action==='delete-inspection'){
+    if(confirm('Delete this saved inspection? This cannot be undone.')){
+      await dbDelete(t.dataset.slug);
+      t.closest('.proj-row').remove();
+      showToast('Deleted');
+    }
+  }
+  else if(action==='export-defects'){ exportDefectReport(); }
+  else if(action==='export-full'){ exportFullChecklist(); }
+  else if(action==='export-json'){ exportJSON(); }
+  else if(action==='submit-central'){ submitCentralRecord(); }
+});
+
+document.addEventListener('input', (e)=>{
+  const t = e.target;
+  if(t.id && t.id.startsWith('m_')){
+    const field = t.id.slice(2);
+    state.meta[field] = t.value;
+    document.getElementById('slugLabel').textContent = state.slug || (state.meta.project ? 'unsaved — ' + state.meta.project : 'no inspection loaded');
+    scheduleSave();
+  }
+  else if(t.dataset && t.dataset.action==='set-notes'){
+    const it = ensureItem(t.dataset.key);
+    it.notes = t.value;
+    scheduleSave();
+  }
+});
+
+document.addEventListener('change', (e)=>{
+  if(e.target.id==='submitKey'){ setSetting({submitKey: e.target.value}); }
+  if(e.target.id==='reviewKey'){ setSetting({reviewKey: e.target.value}); }
+});
+
+document.addEventListener('change', async (e)=>{
+  const t = e.target;
+  if(t.dataset && t.dataset.action==='add-photo' && t.files && t.files.length){
+    const key = t.dataset.key;
+    const it = ensureItem(key);
+    showToast('Compressing photo…');
+    for(const file of Array.from(t.files)){
+      try{
+        const res = await compressImage(file, 1400, 0.6);
+        it.photos.push(Object.assign({id: Date.now()+'-'+Math.random().toString(36).slice(2)}, res));
+      }catch(err){ console.error(err); }
+    }
+    t.value='';
+    renderSections(); renderSummary(); scheduleSave();
+    showToast('Photo added');
+  }
+  if(t.id==='importFile' && t.files && t.files[0]){
+    const file = t.files[0];
+    const text = await file.text();
+    try{
+      const rec = JSON.parse(text);
+      if(!rec.meta || !rec.items) throw new Error('bad file');
+      rec.slug = rec.slug || slugify(rec.meta.project, rec.meta.date);
+      await dbPut({slug:rec.slug, meta:rec.meta, items:rec.items, updatedAt:Date.now()});
+      state = {slug:rec.slug, meta: Object.assign(blankMeta(),rec.meta), items:rec.items, openSections:{}};
+      render();
+      showToast('Inspection restored from backup');
+    }catch(err){
+      alert('That file could not be read as a backup.');
+    }
+    t.value='';
+  }
+});
+
+function showToast(msg){
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(el._t);
+  el._t = setTimeout(()=>el.classList.remove('show'), 1800);
+}
+
+function exportJSON(){
+  const rec = {slug: state.slug || slugify(state.meta.project,state.meta.date), meta: state.meta, items: state.items};
+  const blob = new Blob([JSON.stringify(rec)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = (rec.slug || 'inspection') + '.json';
+  a.click();
+}
+
+// ---------- PDF export ----------
+function headerBlock(doc, title){
+  const W = doc.internal.pageSize.getWidth();
+  doc.setFillColor(27,36,48);
+  doc.rect(0,0,W,26,'F');
+  doc.setTextColor(255,255,255);
+  doc.setFont('helvetica','bold'); doc.setFontSize(13);
+  doc.text('RADIUS PROJECT MANAGEMENT', 14, 11);
+  doc.setFont('helvetica','normal'); doc.setFontSize(9.5);
+  doc.text(title, 14, 18);
+  doc.setTextColor(0,0,0);
+
+  let y = 34;
+  doc.setFont('helvetica','bold'); doc.setFontSize(9);
+  const rows = [
+    ['Project', state.meta.project||'—'],
+    ['Client / Provider', state.meta.client||'—'],
+    ['Builder', state.meta.builder||'—'],
+    ['Inspected by', state.meta.inspector||'—'],
+    ['Date', state.meta.date||'—'],
+    ['Reviewed by (PM / Compliance)', state.meta.reviewer||'—'],
+  ];
+  const colW = (W-28)/2;
+  rows.forEach((r,i)=>{
+    const col = i%2, row = Math.floor(i/2);
+    const x = 14 + col*colW;
+    const ry = y + row*11;
+    doc.setFont('helvetica','bold'); doc.setFontSize(7.5); doc.setTextColor(90,100,110);
+    doc.text(r[0].toUpperCase(), x, ry);
+    doc.setFont('helvetica','normal'); doc.setFontSize(10); doc.setTextColor(20,20,20);
+    doc.text(String(r[1]), x, ry+5);
+  });
+  return y + Math.ceil(rows.length/2)*11 + 6;
+}
+
+function buildDefectReportDoc(){
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({unit:'mm', format:'a4'});
+  const W = doc.internal.pageSize.getWidth();
+  const H = doc.internal.pageSize.getHeight();
+  const margin = 14;
+  let y = headerBlock(doc, 'Defect Report — for client circulation');
+
+  let defects=[], crit=0,maj=0,min=0;
+  CHECKLIST_DATA.forEach((section,sIdx)=>{
+    section.items.forEach((item,iIdx)=>{
+      const key = itemKey(sIdx,iIdx);
+      const it = state.items[key];
+      if(it && it.status==='defect'){
+        defects.push({section, item, it});
+        if(it.severity==='Crit') crit++; else if(it.severity==='Maj') maj++; else min++;
+      }
+    });
+  });
+
+  doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(20,20,20);
+  doc.text(`${defects.length} defect${defects.length===1?'':'s'} recorded  —  ${crit} critical  ·  ${maj} major  ·  ${min} minor`, margin, y);
+  y += 8;
+  doc.setDrawColor(217,211,196); doc.line(margin,y-4,W-margin,y-4);
+
+  if(!defects.length){
+    doc.setFont('helvetica','italic'); doc.setFontSize(10); doc.setTextColor(90,100,110);
+    doc.text('No defects recorded on this inspection.', margin, y+6);
+  }
+
+  const sevColor = sv => sv==='Crit' ? [168,41,31] : sv==='Maj' ? [192,122,30] : [107,114,128];
+  const sevLabel = sv => sv==='Crit' ? 'CRITICAL' : sv==='Maj' ? 'MAJOR' : 'MINOR';
+
+  let lastSection = null;
+  defects.forEach(({section,item,it})=>{
+    // estimate block height
+    const notesLines = it.notes ? doc.splitTextToSize(it.notes, W-2*margin) : [];
+    let photoRows = Math.ceil((it.photos||[]).length/3);
+    let blockH = 16 + notesLines.length*4.6 + photoRows*46 + 6;
+
+    if(lastSection !== section.id){ blockH += 9; }
+    if(y + blockH > H-16){ doc.addPage(); y = 18; lastSection=null; }
+
+    if(lastSection !== section.id){
+      doc.setFont('helvetica','bold'); doc.setFontSize(9.5); doc.setTextColor(27,36,48);
+      doc.text(`${section.id}  ${section.title.toUpperCase()}`, margin, y);
+      y += 6;
+      lastSection = section.id;
+    }
+
+    doc.setFont('helvetica','bold'); doc.setFontSize(10.5); doc.setTextColor(20,20,20);
+    doc.text(item.name, margin, y);
+    const c = sevColor(it.severity);
+    const label = sevLabel(it.severity);
+    const lw = doc.getTextWidth(label)+6;
+    doc.setFillColor(c[0],c[1],c[2]);
+    doc.roundedRect(W-margin-lw, y-4.2, lw, 5.6, 1.4, 1.4, 'F');
+    doc.setFont('helvetica','bold'); doc.setFontSize(7.5); doc.setTextColor(255,255,255);
+    doc.text(label, W-margin-lw+3, y-0.4);
+    y += 5.5;
+
+    doc.setFont('helvetica','italic'); doc.setFontSize(8); doc.setTextColor(110,118,128);
+    doc.text(doc.splitTextToSize(item.spec, W-2*margin), margin, y);
+    y += doc.splitTextToSize(item.spec, W-2*margin).length*3.8 + 2;
+
+    if(it.notes){
+      doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(30,30,30);
+      doc.text(notesLines, margin, y);
+      y += notesLines.length*4.6 + 2;
+    }
+
+    if(it.photos && it.photos.length){
+      const perRow=3, gap=4, imgW=(W-2*margin-gap*(perRow-1))/perRow, imgH=40;
+      it.photos.forEach((p,pi)=>{
+        const col = pi%perRow;
+        if(col===0 && pi>0) y += imgH+4;
+        const x = margin + col*(imgW+gap);
+        try{ doc.addImage(p.dataUrl, 'JPEG', x, y, imgW, imgH, undefined, 'FAST'); }catch(err){}
+      });
+      y += imgH + 8;
+    } else {
+      y += 4;
+    }
+    doc.setDrawColor(230,226,214); doc.line(margin,y-3,W-margin,y-3);
+    y += 3;
+  });
+
+  const pageCount = doc.internal.getNumberOfPages();
+  for(let p=1;p<=pageCount;p++){
+    doc.setPage(p);
+    doc.setFont('helvetica','normal'); doc.setFontSize(7.5); doc.setTextColor(140,145,150);
+    doc.text(`Generated ${new Date().toLocaleDateString()}  ·  Page ${p} of ${pageCount}`, margin, H-8);
+  }
+
+  return doc;
+}
+
+function exportDefectReport(){
+  if(!window.jspdf){ alert('PDF engine still loading — check your internet connection and try again in a moment.'); return; }
+  const doc = buildDefectReportDoc();
+  doc.save((state.slug||'defect-report')+'-defect-report.pdf');
+}
+
+function summarizeForLedger(){
+  let defects=0, crit=0, maj=0, min=0, na=0, photos=0;
+  Object.values(state.items).forEach(it=>{
+    if(it.status==='defect'){
+      defects++;
+      if(it.severity==='Crit') crit++; else if(it.severity==='Maj') maj++; else min++;
+    }
+    if(it.status==='na'){ na++; }
+    photos += (it.photos||[]).length;
+  });
+  return {defects, crit, maj, min, na, photos};
+}
+
+async function submitCentralRecord(){
+  if(!window.jspdf){ alert('This needs a working internet connection to build and send the report. Try again once you have signal.'); return; }
+  const setting = await getSetting();
+  const key = (setting && setting.submitKey) ? setting.submitKey.trim() : '';
+  if(!key){ alert('Ask Jason for the central record key, then paste it into the "Central record key" box above the summary — you only need to do this once on this device.'); return; }
+  if(!state.meta.project){ alert('Add a project name first so the central record can file this under the right job.'); return; }
+  if(!state.slug){ state.slug = slugify(state.meta.project, state.meta.date); scheduleSave(); }
+
+  showToast('Sending to central record…');
+  try{
+    const doc = buildDefectReportDoc();
+    const pdfBase64 = doc.output('datauristring').split(',')[1];
+    const r1 = await fetch('/.netlify/functions/submit-inspection', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','X-Submit-Key':key},
+      body: JSON.stringify({slug: state.slug, filename:'defect-report.pdf', contentBase64: pdfBase64, meta: state.meta, kind:'pdf', summary: summarizeForLedger()})
+    });
+    const j1 = await r1.json().catch(()=>({}));
+    if(!r1.ok) throw new Error(j1.error || ('Upload failed (status '+r1.status+')'));
+
+    const slim = {slug: state.slug, meta: state.meta, summary: summarizeForLedger(), submittedAt: new Date().toISOString()};
+    const slimBase64 = btoa(unescape(encodeURIComponent(JSON.stringify(slim, null, 2))));
+    const r2 = await fetch('/.netlify/functions/submit-inspection', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','X-Submit-Key':key},
+      body: JSON.stringify({slug: state.slug, filename:'summary.json', contentBase64: slimBase64, meta: state.meta, kind:'json'})
+    });
+    if(!r2.ok){ const j2 = await r2.json().catch(()=>({})); throw new Error(j2.error || 'Log update failed'); }
+
+    showToast('Sent — central record updated');
+  }catch(err){
+    alert('Could not send to the central record. Your inspection is still saved safely on this device — try again once you have a better connection.\n\n'+(err && err.message ? err.message : err));
+  }
+}
+
+function statusLabel(s){
+  if(s==='approved') return {text:'Approved', cls:'chip-approved'};
+  if(s==='changes_requested') return {text:'Changes requested', cls:'chip-changes'};
+  return {text:'Pending review', cls:'chip-pending'};
+}
+
+async function getReviewKey(){
+  const s = await getSetting();
+  return (s && s.reviewKey) ? s.reviewKey.trim() : '';
+}
+
+async function openReviewQueue(){
+  const key = await getReviewKey();
+  if(!key){ alert('Paste the manager review key into the "Manager review key" box above first — ask Jason if you don\'t have it.'); return; }
+  const listEl = document.getElementById('reviewList');
+  listEl.innerHTML = '<div class="empty-hint">Loading…</div>';
+  document.getElementById('reviewModal').classList.add('show');
+  try{
+    const res = await fetch('/.netlify/functions/review?list=1', { headers:{'X-Review-Key':key} });
+    const j = await res.json();
+    if(!res.ok) throw new Error(j.error || ('Failed to load ('+res.status+')'));
+    renderReviewList(j.list || []);
+  }catch(err){
+    listEl.innerHTML = `<div class="empty-hint">Could not load the review queue — ${ (err.message||err) }</div>`;
+  }
+}
+
+function renderReviewList(list){
+  const listEl = document.getElementById('reviewList');
+  if(!list.length){ listEl.innerHTML = '<div class="empty-hint">Nothing submitted yet.</div>'; return; }
+  list.sort((a,b)=> new Date(b.submittedAt) - new Date(a.submittedAt));
+  listEl.innerHTML = list.map(rec=>{
+    const st = statusLabel(rec.status);
+    const sum = rec.summary || {};
+    return `<div class="proj-row" style="flex-direction:column;align-items:stretch;gap:8px;">
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
+        <div>
+          <div class="proj-name">${rec.meta && rec.meta.project || '(untitled)'}</div>
+          <div class="proj-sub">${rec.meta && rec.meta.date||''} · ${rec.meta && rec.meta.inspector||'unknown inspector'} · ${sum.defects||0} defects (${sum.crit||0} crit / ${sum.maj||0} maj / ${sum.min||0} min)</div>
+        </div>
+        <span class="chip ${st.cls}">${st.text}</span>
+      </div>
+      ${rec.reviewNote ? `<div class="empty-hint" style="padding:0;">Note: ${rec.reviewNote}</div>` : ''}
+      <div class="proj-actions">
+        <button class="icon-btn" data-action="view-report-pdf" data-slug="${rec.slug}">View PDF</button>
+        <button class="icon-btn" data-action="approve-report" data-slug="${rec.slug}">Approve</button>
+        <button class="icon-btn" data-action="request-changes-report" data-slug="${rec.slug}">Request changes</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function actOnReport(slug, action, note){
+  const key = await getReviewKey();
+  if(!key) return;
+  try{
+    const res = await fetch('/.netlify/functions/review', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','X-Review-Key':key},
+      body: JSON.stringify({slug, action, note: note||''})
+    });
+    const j = await res.json().catch(()=>({}));
+    if(!res.ok) throw new Error(j.error||'Update failed');
+    showToast(action==='approve' ? 'Approved' : 'Sent back for changes');
+    openReviewQueue();
+  }catch(err){
+    alert('Could not update that report: '+(err.message||err));
+  }
+}
+
+async function viewReportPdf(slug){
+  const key = await getReviewKey();
+  if(!key) return;
+  try{
+    const res = await fetch('/.netlify/functions/review?pdf='+encodeURIComponent(slug), { headers:{'X-Review-Key':key} });
+    if(!res.ok){ const j = await res.json().catch(()=>({})); throw new Error(j.error||'PDF not found'); }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank');
+  }catch(err){
+    alert('Could not open that PDF: '+(err.message||err));
+  }
+}
+
+function exportFullChecklist(){
+  if(!window.jspdf){ alert('PDF engine still loading — check your internet connection and try again in a moment.'); return; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({unit:'mm', format:'a4'});
+  const W = doc.internal.pageSize.getWidth();
+  let y = headerBlock(doc, 'Full Checklist — internal record (no photos)');
+
+  CHECKLIST_DATA.forEach((section,sIdx)=>{
+    const body = section.items.map((item,iIdx)=>{
+      const key = itemKey(sIdx,iIdx);
+      const it = state.items[key] || {status:null,severity:'',notes:''};
+      const statusLabel = it.status==='ok' ? 'OK' : it.status==='na' ? 'N/A' : it.status==='defect' ? ('DEFECT'+(it.severity?(' ('+it.severity+')'):'')) : '—';
+      return [item.name, item.spec, statusLabel, it.notes||''];
+    });
+    doc.autoTable({
+      startY: y,
+      head: [[section.id+'  '+section.title, '', '', '']],
+      body: body,
+      theme: 'grid',
+      styles:{fontSize:7.5, cellPadding:2, overflow:'linebreak', valign:'top'},
+      headStyles:{fillColor:[27,36,48], textColor:255, fontStyle:'bold', fontSize:9},
+      columnStyles:{
+        0:{cellWidth:38, fontStyle:'bold'},
+        1:{cellWidth:'auto'},
+        2:{cellWidth:26},
+        3:{cellWidth:40}
+      },
+      didParseCell: function(data){
+        if(data.section==='body' && data.column.index===2){
+          const v = data.cell.raw;
+          if(v && v.indexOf('DEFECT')===0) data.cell.styles.textColor=[168,41,31];
+          else if(v==='OK') data.cell.styles.textColor=[60,122,92];
+          else if(v==='N/A') data.cell.styles.textColor=[107,114,128];
+        }
+      },
+      margin:{left:14,right:14}
+    });
+    y = doc.lastAutoTable.finalY + 8;
+    if(y > doc.internal.pageSize.getHeight()-30 && sIdx < CHECKLIST_DATA.length-1){ doc.addPage(); y=18; }
+  });
+
+  const pageCount = doc.internal.getNumberOfPages();
+  for(let p=1;p<=pageCount;p++){
+    doc.setPage(p);
+    doc.setFont('helvetica','normal'); doc.setFontSize(7.5); doc.setTextColor(140,145,150);
+    doc.text(`Generated ${new Date().toLocaleDateString()}  ·  Page ${p} of ${pageCount}`, 14, doc.internal.pageSize.getHeight()-8);
+  }
+
+  doc.save((state.slug||'checklist')+'-full-checklist.pdf');
+}
+
+// ---------- init ----------
+(async function init(){
+  if(!state.meta.date){ state.meta.date = new Date().toISOString().slice(0,10); }
+  render();
+  try{
+    const s = await getSetting();
+    if(s && s.submitKey) document.getElementById('submitKey').value = s.submitKey;
+    if(s && s.reviewKey) document.getElementById('reviewKey').value = s.reviewKey;
+  }catch(err){}
+})();
+</script>
+</body>
+</html>
