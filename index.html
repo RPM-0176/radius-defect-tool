@@ -1165,6 +1165,8 @@ function buildDefectReportDoc(watermark){
     y += 3;
   });
 
+  drawSignOffPage(doc, W, H, margin);
+
   const pageCount = doc.internal.getNumberOfPages();
   const contentPages = pageCount - 1;
   for(let p=2;p<=pageCount;p++){
@@ -1431,18 +1433,59 @@ async function downloadMyPdf(slug){
   }
 }
 
-function exportFullChecklist(){
-  if(!window.jspdf){ alert('PDF engine still loading — check your internet connection and try again in a moment.'); return; }
-  const { jsPDF } = window.jspdf;
-  const doc = new jsPDF({unit:'mm', format:'a4'});
-  const W = doc.internal.pageSize.getWidth();
-  const H = doc.internal.pageSize.getHeight();
-  const margin = 14;
-  let y = headerBlock(doc, stageLabel(state.meta.stage) + ' — Full Checklist, internal record', false);
+function drawSignOffPage(doc, W, H, margin){
+  doc.addPage();
+  const pageNum = doc.internal.getNumberOfPages();
+  let y = 30;
+  doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.setTextColor(27,36,48);
+  doc.text('Sign-off', margin, y);
+  y += 4;
+  doc.setDrawColor(217,211,196); doc.setLineWidth(0.3);
+  doc.line(margin, y, W-margin, y);
+  y += 14;
 
+  doc.setFont('helvetica','normal'); doc.setFontSize(9.5); doc.setTextColor(60,68,76);
+  const intro = `This report was prepared by Radius Project Management and reflects the inspection findings for ${pdfSafe(state.meta.project)||'this property'} as at the date shown below. Reference: ${state.slug||'unsaved'}.`;
+  const introLines = doc.splitTextToSize(intro, W-margin*2);
+  doc.text(introLines, margin, y);
+  y += introLines.length*5 + 18;
+
+  const fields = [
+    ['Inspected by', state.meta.inspector||'—', state.meta.date||'—'],
+    ['Reviewed / Approved by', state.meta.reviewer||'—', ''],
+  ];
+  fields.forEach(([label, name, date])=>{
+    doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(90,100,110);
+    doc.text(label.toUpperCase(), margin, y);
+    y += 6;
+    doc.setFont('helvetica','normal'); doc.setFontSize(10); doc.setTextColor(20,20,20);
+    doc.text(name, margin, y);
+    doc.text('Date:', margin+90, y);
+    doc.text(date||'', margin+105, y);
+    y += 10;
+    doc.setDrawColor(200,196,188); doc.setLineWidth(0.3);
+    doc.line(margin, y, margin+80, y);
+    doc.text('Signature', margin, y+5);
+    y += 22;
+  });
+
+  doc.setFont('helvetica','italic'); doc.setFontSize(7.5); doc.setTextColor(140,145,150);
+  doc.text('This sign-off reflects internal review status and does not itself constitute a legal signature or contractual instrument.', margin, H-20);
+
+  return pageNum;
+}
+
+// Builds the section tables + photo appendix + sign-off page onto whatever
+// doc/page it's currently pointed at, and reports back which page everything
+// landed on. Used twice: once as a throwaway "dry run" purely to learn page
+// numbers, then for real once we know where to put the Table of Contents.
+function buildChecklistBody(doc, W, H, margin, startY){
+  let y = startY;
   const photographedItems = [];
+  const sectionPageMap = [];
 
   activeChecklist().forEach((section,sIdx)=>{
+    sectionPageMap.push({id:section.id, title:section.title, page: doc.internal.getNumberOfPages()});
     const body = section.items.map((item,iIdx)=>{
       const key = itemKey(sIdx,iIdx);
       const it = state.items[key] || {status:null,severity:'',notes:''};
@@ -1478,8 +1521,10 @@ function exportFullChecklist(){
   });
 
   // Photo appendix — every photographed item, regardless of status, grouped by section
+  let photoAppendixPage = null;
   if(photographedItems.length){
     doc.addPage();
+    photoAppendixPage = doc.internal.getNumberOfPages();
     y = 18;
     doc.setFont('helvetica','bold'); doc.setFontSize(13); doc.setTextColor(27,36,48);
     doc.text('Photo Appendix', margin, y);
@@ -1539,6 +1584,61 @@ function exportFullChecklist(){
     });
   }
 
+  const signOffPage = drawSignOffPage(doc, W, H, margin);
+
+  return {sectionPageMap, photoAppendixPage, signOffPage};
+}
+
+function exportFullChecklist(){
+  if(!window.jspdf){ alert('PDF engine still loading — check your internet connection and try again in a moment.'); return; }
+  const { jsPDF } = window.jspdf;
+  const W_ = 210, H_ = 297, margin = 14; // A4 mm — known constants, avoids building a throwaway doc just to read them
+
+  // Dry run: build the exact same content into a throwaway document purely to
+  // learn which page everything lands on. jsPDF + autotable's own pagination
+  // can't reliably be edited after the fact (inserting a page afterward was
+  // tried and produced wrong page numbers), so instead we find out correctly
+  // up front and build the real, final document in the right order.
+  const dryDoc = new jsPDF({unit:'mm', format:'a4'});
+  headerBlock(dryDoc, stageLabel(state.meta.stage) + ' — Full Checklist, internal record', false);
+  const dryResult = buildChecklistBody(dryDoc, W_, H_, margin, 18);
+
+  const doc = new jsPDF({unit:'mm', format:'a4'});
+  const W = doc.internal.pageSize.getWidth();
+  const H = doc.internal.pageSize.getHeight();
+  headerBlock(doc, stageLabel(state.meta.stage) + ' — Full Checklist, internal record', false);
+  // headerBlock already moved us to page 2 — draw the TOC there using the
+  // page numbers learned from the dry run, offset by the one TOC page itself.
+  let tocY = 26;
+  doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.setTextColor(27,36,48);
+  doc.text('Table of Contents', margin, tocY);
+  tocY += 4;
+  doc.setDrawColor(217,211,196); doc.setLineWidth(0.3);
+  doc.line(margin, tocY, W-margin, tocY);
+  tocY += 12;
+
+  const tocEntries = dryResult.sectionPageMap.map(s => ({label: `${s.id}  ${s.title}`, page: s.page+1}));
+  if(dryResult.photoAppendixPage) tocEntries.push({label:'Photo Appendix', page: dryResult.photoAppendixPage+1});
+  tocEntries.push({label:'Sign-off', page: dryResult.signOffPage+1});
+
+  tocEntries.forEach(entry=>{
+    doc.setFont('helvetica','normal'); doc.setFontSize(10); doc.setTextColor(30,30,30);
+    doc.text(entry.label, margin, tocY);
+    const pageStr = String(entry.page);
+    const dotsStart = margin + doc.getTextWidth(entry.label) + 4;
+    const dotsEnd = W - margin - doc.getTextWidth(pageStr) - 4;
+    if(dotsEnd > dotsStart){
+      doc.setTextColor(200,196,188);
+      doc.text('.'.repeat(Math.max(Math.floor((dotsEnd-dotsStart)/1.6),0)), dotsStart, tocY);
+    }
+    doc.setTextColor(30,30,30);
+    doc.text(pageStr, W-margin, tocY, {align:'right'});
+    tocY += 7.5;
+  });
+
+  doc.addPage();
+  buildChecklistBody(doc, W, H, margin, 18);
+
   const pageCount = doc.internal.getNumberOfPages();
   const contentPages = pageCount - 1;
   for(let p=2;p<=pageCount;p++){
@@ -1563,4 +1663,3 @@ function exportFullChecklist(){
 </script>
 </body>
 </html>
-
