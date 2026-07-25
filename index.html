@@ -939,33 +939,43 @@ function buildDefectReportDoc(){
   const margin = 14;
   let y = headerBlock(doc, stageLabel(state.meta.stage) + ' — Defect Report for client circulation');
 
-  let defects=[], crit=0,maj=0,min=0;
+  let entries=[], crit=0,maj=0,min=0;
   activeChecklist().forEach((section,sIdx)=>{
     section.items.forEach((item,iIdx)=>{
       const key = itemKey(sIdx,iIdx);
       const it = state.items[key];
-      if(it && it.status==='defect'){
-        defects.push({section, item, it});
+      if(!it || !it.status) return;
+      const hasPhotos = it.photos && it.photos.length;
+      if(it.status==='defect'){
+        entries.push({section, item, it});
         if(it.severity==='Crit') crit++; else if(it.severity==='Maj') maj++; else min++;
+      } else if(hasPhotos){
+        entries.push({section, item, it});
       }
     });
   });
+  const defects = entries.filter(e=>e.it.status==='defect');
 
   doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(20,20,20);
   doc.text(`${defects.length} defect${defects.length===1?'':'s'} recorded  —  ${crit} critical  ·  ${maj} major  ·  ${min} minor`, margin, y);
   y += 8;
   doc.setDrawColor(217,211,196); doc.line(margin,y-4,W-margin,y-4);
 
-  if(!defects.length){
+  if(!entries.length){
     doc.setFont('helvetica','italic'); doc.setFontSize(10); doc.setTextColor(90,100,110);
-    doc.text('No defects recorded on this inspection.', margin, y+6);
+    doc.text('No defects or photographed items recorded on this inspection.', margin, y+6);
   }
 
   const sevColor = sv => sv==='Crit' ? [168,41,31] : sv==='Maj' ? [192,122,30] : [107,114,128];
   const sevLabel = sv => sv==='Crit' ? 'CRITICAL' : sv==='Maj' ? 'MAJOR' : 'MINOR';
+  const statusBadge = (it) => {
+    if(it.status==='defect') return { color: sevColor(it.severity), label: sevLabel(it.severity) };
+    if(it.status==='ok') return { color: [60,122,92], label: 'OK' };
+    return { color: [107,114,128], label: 'N/A' };
+  };
 
   let lastSection = null;
-  defects.forEach(({section,item,it})=>{
+  entries.forEach(({section,item,it})=>{
     // estimate block height
     const notesLines = it.notes ? doc.splitTextToSize(it.notes, W-2*margin) : [];
     let photoRows = Math.ceil((it.photos||[]).length/3);
@@ -983,13 +993,12 @@ function buildDefectReportDoc(){
 
     doc.setFont('helvetica','bold'); doc.setFontSize(10.5); doc.setTextColor(20,20,20);
     doc.text(item.name, margin, y);
-    const c = sevColor(it.severity);
-    const label = sevLabel(it.severity);
-    const lw = doc.getTextWidth(label)+6;
-    doc.setFillColor(c[0],c[1],c[2]);
+    const badge = statusBadge(it);
+    const lw = doc.getTextWidth(badge.label)+6;
+    doc.setFillColor(badge.color[0],badge.color[1],badge.color[2]);
     doc.roundedRect(W-margin-lw, y-4.2, lw, 5.6, 1.4, 1.4, 'F');
     doc.setFont('helvetica','bold'); doc.setFontSize(7.5); doc.setTextColor(255,255,255);
-    doc.text(label, W-margin-lw+3, y-0.4);
+    doc.text(badge.label, W-margin-lw+3, y-0.4);
     y += 5.5;
 
     doc.setFont('helvetica','italic'); doc.setFontSize(8); doc.setTextColor(110,118,128);
@@ -1287,13 +1296,18 @@ function exportFullChecklist(){
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({unit:'mm', format:'a4'});
   const W = doc.internal.pageSize.getWidth();
-  let y = headerBlock(doc, stageLabel(state.meta.stage) + ' — Full Checklist, internal record (no photos)');
+  const H = doc.internal.pageSize.getHeight();
+  const margin = 14;
+  let y = headerBlock(doc, stageLabel(state.meta.stage) + ' — Full Checklist, internal record');
+
+  const photographedItems = [];
 
   activeChecklist().forEach((section,sIdx)=>{
     const body = section.items.map((item,iIdx)=>{
       const key = itemKey(sIdx,iIdx);
       const it = state.items[key] || {status:null,severity:'',notes:''};
       const statusLabel = it.status==='ok' ? 'OK' : it.status==='na' ? 'N/A' : it.status==='defect' ? ('DEFECT'+(it.severity?(' ('+it.severity+')'):'')) : '—';
+      if(it.photos && it.photos.length) photographedItems.push({section, item, it});
       return [item.name, item.spec, statusLabel, it.notes||''];
     });
     doc.autoTable({
@@ -1323,6 +1337,68 @@ function exportFullChecklist(){
     if(y > doc.internal.pageSize.getHeight()-30 && sIdx < activeChecklist().length-1){ doc.addPage(); y=18; }
   });
 
+  // Photo appendix — every photographed item, regardless of status, grouped by section
+  if(photographedItems.length){
+    doc.addPage();
+    y = 18;
+    doc.setFont('helvetica','bold'); doc.setFontSize(13); doc.setTextColor(27,36,48);
+    doc.text('Photo Appendix', margin, y);
+    y += 8;
+    doc.setDrawColor(217,211,196); doc.line(margin,y-4,W-margin,y-4);
+
+    const badgeFor = (it) => {
+      if(it.status==='defect'){
+        const c = it.severity==='Crit' ? [168,41,31] : it.severity==='Maj' ? [192,122,30] : [107,114,128];
+        const l = it.severity==='Crit' ? 'CRITICAL' : it.severity==='Maj' ? 'MAJOR' : 'MINOR';
+        return {color:c, label:l};
+      }
+      if(it.status==='ok') return {color:[60,122,92], label:'OK'};
+      return {color:[107,114,128], label:'N/A'};
+    };
+
+    let lastSection = null;
+    photographedItems.forEach(({section,item,it})=>{
+      const notesLines = it.notes ? doc.splitTextToSize(it.notes, W-2*margin) : [];
+      const photoRows = Math.ceil((it.photos||[]).length/3);
+      let blockH = 16 + notesLines.length*4.6 + photoRows*46 + 6 + (lastSection!==section.id ? 9 : 0);
+      if(y + blockH > H-16){ doc.addPage(); y=18; lastSection=null; }
+
+      if(lastSection !== section.id){
+        doc.setFont('helvetica','bold'); doc.setFontSize(9.5); doc.setTextColor(27,36,48);
+        doc.text(`${section.id}  ${section.title.toUpperCase()}`, margin, y);
+        y += 6;
+        lastSection = section.id;
+      }
+
+      doc.setFont('helvetica','bold'); doc.setFontSize(10.5); doc.setTextColor(20,20,20);
+      doc.text(item.name, margin, y);
+      const badge = badgeFor(it);
+      const lw = doc.getTextWidth(badge.label)+6;
+      doc.setFillColor(badge.color[0],badge.color[1],badge.color[2]);
+      doc.roundedRect(W-margin-lw, y-4.2, lw, 5.6, 1.4, 1.4, 'F');
+      doc.setFont('helvetica','bold'); doc.setFontSize(7.5); doc.setTextColor(255,255,255);
+      doc.text(badge.label, W-margin-lw+3, y-0.4);
+      y += 6;
+
+      if(it.notes){
+        doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(30,30,30);
+        doc.text(notesLines, margin, y);
+        y += notesLines.length*4.6 + 2;
+      }
+
+      const perRow=3, gap=4, imgW=(W-2*margin-gap*(perRow-1))/perRow, imgH=40;
+      (it.photos||[]).forEach((p,pi)=>{
+        const col = pi%perRow;
+        if(col===0 && pi>0) y += imgH+4;
+        const x = margin + col*(imgW+gap);
+        try{ doc.addImage(p.dataUrl, 'JPEG', x, y, imgW, imgH, undefined, 'FAST'); }catch(err){}
+      });
+      y += imgH + 8;
+      doc.setDrawColor(230,226,214); doc.line(margin,y-3,W-margin,y-3);
+      y += 3;
+    });
+  }
+
   const pageCount = doc.internal.getNumberOfPages();
   for(let p=1;p<=pageCount;p++){
     doc.setPage(p);
@@ -1346,4 +1422,3 @@ function exportFullChecklist(){
 </script>
 </body>
 </html>
-
