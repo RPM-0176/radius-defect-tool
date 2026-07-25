@@ -38,6 +38,7 @@
 const GITHUB_API = 'https://api.github.com';
 
 exports.handler = async (event) => {
+  const startedAt = Date.now();
   if (event.httpMethod !== 'POST') {
     return { statusCode: 405, body: JSON.stringify({ error: 'Method not allowed' }) };
   }
@@ -110,6 +111,8 @@ exports.handler = async (event) => {
   if (!slug || !filename || !contentBase64) {
     return { statusCode: 400, body: JSON.stringify({ error: 'Missing slug, filename or contentBase64' }) };
   }
+  const approxKB = Math.round((contentBase64.length * 0.75) / 1024);
+  console.log(`[submit-inspection] ${filename} for ${slug} — approx ${approxKB}KB, kind=${kind}`);
   // keep the path safe — slug is already sanitised client-side, but double check here
   const safeSlug = String(slug).replace(/[^a-zA-Z0-9_\-]/g, '-');
   const safeFilename = String(filename).replace(/[^a-zA-Z0-9_.\-]/g, '-');
@@ -126,6 +129,7 @@ exports.handler = async (event) => {
       sha = j.sha;
     } else if (getRes.status !== 404) {
       const t = await getRes.text();
+      console.error(`[submit-inspection] GitHub lookup failed (${getRes.status}) after ${Date.now()-startedAt}ms:`, t);
       return { statusCode: getRes.status, body: JSON.stringify({ error: 'GitHub lookup failed', detail: t }) };
     }
 
@@ -142,6 +146,7 @@ exports.handler = async (event) => {
 
     if (!putRes.ok) {
       const t = await putRes.text();
+      console.error(`[submit-inspection] GitHub write failed (${putRes.status}) after ${Date.now()-startedAt}ms:`, t);
       return { statusCode: putRes.status, body: JSON.stringify({ error: 'GitHub write failed', detail: t }) };
     }
     const putJson = await putRes.json();
@@ -191,6 +196,7 @@ exports.handler = async (event) => {
       } catch (regErr) {
         // Non-fatal — the PDF itself already saved successfully; the
         // review queue just won't show this one until the next attempt.
+        console.error('[submit-inspection] registry update failed (non-fatal):', regErr && regErr.message ? regErr.message : regErr);
       }
     }
 
@@ -230,14 +236,20 @@ exports.handler = async (event) => {
         });
       } catch (ledgerErr) {
         // Non-fatal — the actual report file already saved successfully.
+        console.error('[submit-inspection] ledger update failed (non-fatal):', ledgerErr && ledgerErr.message ? ledgerErr.message : ledgerErr);
       }
     }
 
+    console.log(`[submit-inspection] success for ${slug} in ${Date.now()-startedAt}ms`);
     return {
       statusCode: 200,
       body: JSON.stringify({ ok: true, path, submittedBy, url: putJson.content && putJson.content.html_url })
     };
   } catch (err) {
-    return { statusCode: 500, body: JSON.stringify({ error: String(err && err.message ? err.message : err) }) };
+    console.error(`[submit-inspection] UNHANDLED ERROR after ${Date.now()-startedAt}ms for ${slug || 'unknown slug'}:`, err && err.stack ? err.stack : err);
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ error: (err && err.message) ? err.message : String(err), where: 'unhandled' })
+    };
   }
 };
