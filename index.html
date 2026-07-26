@@ -1254,8 +1254,21 @@ function summarizeForLedger(){
 }
 
 const UPLOAD_CHUNK_SIZE = 900000; // ~900K base64 chars ≈ 675KB raw per request — deliberately conservative
+const UPLOAD_MAX_RETRIES = 4;
 
-async function postToSubmit(body, key){
+function isRetryableFailure(statusCode, errMessage){
+  // Don't retry things a retry can't fix: bad key, bad request, deliberate rejection.
+  if(statusCode === 401 || statusCode === 400 || statusCode === 403){
+    // ...unless it's specifically a rate-limit style 403 (GitHub's secondary rate limit
+    // wording), which genuinely does resolve itself after a short wait.
+    return /rate limit/i.test(errMessage||'');
+  }
+  // Everything else transient-looking (network drop, 5xx, gateway timeouts, or a
+  // stray non-JSON response from an intermediary) is worth retrying.
+  return true;
+}
+
+async function postToSubmitOnce(body, key){
   const res = await fetch('/.netlify/functions/submit-inspection', {
     method:'POST',
     headers:{'Content-Type':'application/json','X-Submit-Key':key},
@@ -1264,13 +1277,38 @@ async function postToSubmit(body, key){
   const rawText = await res.text();
   let j = {};
   try{ j = JSON.parse(rawText); }catch(parseErr){
-    // The response wasn't JSON at all — almost always means something in front of
-    // our code (not our code itself) rejected the request. Surface the raw
-    // response so it's actually diagnosable instead of a blank generic message.
-    throw new Error('Server returned a non-JSON response (status '+res.status+'): '+(rawText||'(empty)').slice(0,200));
+    const err = new Error('Server returned a non-JSON response (status '+res.status+'): '+(rawText||'(empty)').slice(0,200));
+    err.statusCode = res.status;
+    throw err;
   }
-  if(!res.ok) throw new Error(j.error || ('Upload failed (status '+res.status+')'));
+  if(!res.ok){
+    const err = new Error(j.error || ('Upload failed (status '+res.status+')'));
+    err.statusCode = res.status;
+    throw err;
+  }
   return j;
+}
+
+// Wraps every request in automatic retries with increasing delays, so a
+// dropped connection or a momentary GitHub API hiccup on site doesn't force
+// the whole inspection to be resent from scratch.
+async function postToSubmit(body, key, progressLabel){
+  let lastErr;
+  for(let attempt=1; attempt<=UPLOAD_MAX_RETRIES; attempt++){
+    try{
+      return await postToSubmitOnce(body, key);
+    }catch(err){
+      lastErr = err;
+      const statusCode = err.statusCode; // undefined for a pure network failure (fetch threw)
+      if(!isRetryableFailure(statusCode, err.message) || attempt === UPLOAD_MAX_RETRIES){
+        throw err;
+      }
+      const delayMs = Math.min(1000 * Math.pow(2, attempt-1), 8000);
+      if(progressLabel) showToast(`${progressLabel} — connection hiccup, retrying (${attempt}/${UPLOAD_MAX_RETRIES})…`);
+      await new Promise(r=>setTimeout(r, delayMs));
+    }
+  }
+  throw lastErr;
 }
 
 // Sends a file to the central record, automatically splitting it into
@@ -1278,13 +1316,13 @@ async function postToSubmit(body, key){
 // reports can easily be several MB once encoded).
 async function submitFileToCentral(slug, filename, contentBase64, meta, kind, summary, key){
   if(contentBase64.length <= UPLOAD_CHUNK_SIZE){
-    return postToSubmit({slug, filename, contentBase64, meta, kind, summary}, key);
+    return postToSubmit({slug, filename, contentBase64, meta, kind, summary}, key, 'Sending');
   }
   const totalChunks = Math.ceil(contentBase64.length / UPLOAD_CHUNK_SIZE);
   for(let i=0; i<totalChunks; i++){
     const chunkData = contentBase64.slice(i*UPLOAD_CHUNK_SIZE, (i+1)*UPLOAD_CHUNK_SIZE);
     showToast(`Sending part ${i+1} of ${totalChunks}…`);
-    await postToSubmit({slug, filename, action:'chunk', chunkIndex:i, chunkData}, key);
+    await postToSubmit({slug, filename, action:'chunk', chunkIndex:i, chunkData}, key, `Part ${i+1} of ${totalChunks}`);
   }
   showToast('Assembling report…');
   return postToSubmit({slug, filename, action:'finalize', totalChunks, meta, kind, summary}, key);
