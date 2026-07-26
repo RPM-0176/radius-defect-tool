@@ -156,6 +156,26 @@ exports.handler = async (event) => {
       existing.exists ? existing.sha : undefined
     );
 
+    if (kind === 'wip') {
+      try {
+        const wipIndexPath = 'reports/wip-index.json';
+        const wipExisting = await ghGetContent(wipIndexPath);
+        let list = wipExisting.exists ? JSON.parse(Buffer.from(wipExisting.content, 'base64').toString('utf-8')) : [];
+        const now = new Date().toISOString();
+        const idx = list.findIndex(r => r.slug === safeSlug);
+        const entry = { slug: safeSlug, meta: meta || {}, submittedBy, updatedAt: now, path: finalPath };
+        if (idx === -1) list.push(entry); else list[idx] = entry;
+        await ghPutContent(
+          wipIndexPath,
+          Buffer.from(JSON.stringify(list, null, 2), 'utf-8').toString('base64'),
+          `WIP sync: ${safeSlug} (${submittedBy})`,
+          wipExisting.exists ? wipExisting.sha : undefined
+        );
+      } catch (wipErr) {
+        console.error('[submit-inspection] wip-index update failed (non-fatal):', wipErr && wipErr.message ? wipErr.message : wipErr);
+      }
+    }
+
     if (kind === 'pdf') {
       try {
         const regPath = 'reports/registry.json';
