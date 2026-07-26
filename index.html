@@ -299,6 +299,7 @@ textarea.notes:focus{outline:2px solid var(--steel-2);outline-offset:-1px;}
     <button class="btn" data-action="export-full">Full checklist (PDF)</button>
     <button class="btn btn-dark" data-action="submit-central">Send to central record</button>
     <button class="btn" data-action="open-mine">My submissions</button>
+    <button class="btn" data-action="open-wip">Continue from cloud</button>
     <button class="btn" data-action="open-review">Review queue</button>
     <button class="btn btn-sm" data-action="export-json">Backup (.json)</button>
     <label class="btn btn-sm">Restore .json<input type="file" id="importFile" accept="application/json" style="display:none"></label>
@@ -367,6 +368,17 @@ textarea.notes:focus{outline:2px solid var(--steel-2);outline-offset:-1px;}
     <div id="mineList"></div>
     <div style="margin-top:14px;text-align:right;">
       <button class="btn btn-sm" data-action="close-mine-modal">Close</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="wipModal">
+  <div class="modal" style="max-width:560px;">
+    <h3>Continue from cloud</h3>
+    <p class="empty-hint" style="padding:0 0 12px;">Inspections you've been working on, synced from your other devices under your own key.</p>
+    <div id="wipList"></div>
+    <div style="margin-top:14px;text-align:right;">
+      <button class="btn btn-sm" data-action="close-wip-modal">Close</button>
     </div>
   </div>
 </div>
@@ -482,7 +494,42 @@ function scheduleSave(){
     await dbPut({slug: state.slug, meta: state.meta, items: state.items, updatedAt: Date.now()});
     dot.classList.remove('saving'); label.textContent='saved locally';
     document.getElementById('slugLabel').textContent = state.slug;
+    scheduleWipSync();
   }, 500);
+}
+
+// ---------- cloud sync (continue on another device) ----------
+let wipSyncTimer = null;
+let wipSyncInFlight = false;
+
+function scheduleWipSync(){
+  clearTimeout(wipSyncTimer);
+  wipSyncTimer = setTimeout(runWipSync, 4000);
+}
+
+async function runWipSync(){
+  if(wipSyncInFlight) return;
+  const setting = await getSetting();
+  const key = (setting && setting.submitKey) ? setting.submitKey.trim() : '';
+  if(!key) return; // no personal key on this device yet — local save already succeeded, nothing more to do
+  if(!state.meta.project) return; // nothing meaningful to sync yet
+  if(!state.slug) state.slug = slugify(state.meta.project, state.meta.date, state.meta.stage);
+
+  const label = document.getElementById('saveLabel');
+  wipSyncInFlight = true;
+  try{
+    const payload = JSON.stringify({meta: state.meta, items: state.items});
+    const base64 = btoa(unescape(encodeURIComponent(payload)));
+    label.textContent = 'saved locally · syncing…';
+    await submitFileToCentral(state.slug, 'wip-data.json', base64, state.meta, 'wip', null, key);
+    label.textContent = 'saved locally · available on your other devices';
+  }catch(err){
+    // Best-effort only — the local save already succeeded regardless.
+    label.textContent = 'saved locally · sync pending (will retry)';
+    console.warn('[wip-sync] failed (non-fatal, local save is safe):', err);
+  } finally {
+    wipSyncInFlight = false;
+  }
 }
 
 // ---------- image compression ----------
@@ -769,6 +816,11 @@ document.addEventListener('click', async (e)=>{
     document.getElementById('mineModal').classList.remove('show');
   }
   else if(action==='download-mine-pdf'){ downloadMyPdf(t.dataset.slug); }
+  else if(action==='open-wip'){ openWipList(); }
+  else if(action==='close-wip-modal'){
+    document.getElementById('wipModal').classList.remove('show');
+  }
+  else if(action==='continue-wip'){ continueFromCloud(t.dataset.slug, t.closest('button')); }
   else if(action==='load-inspection'){
     const list = await dbGetAll();
     const rec = list.find(r=>r.slug===t.dataset.slug);
@@ -1433,6 +1485,78 @@ async function downloadMyPdf(slug){
     showToast('Downloaded — ready to attach to an email');
   }catch(err){
     alert('Could not download that PDF: '+(err.message||err));
+  }
+}
+
+async function openWipList(){
+  const key = await getSubmitKey();
+  if(!key){ alert('Paste your personal access key into the box above the summary first.'); return; }
+  const listEl = document.getElementById('wipList');
+  listEl.innerHTML = '<div class="empty-hint">Loading…</div>';
+  document.getElementById('wipModal').classList.add('show');
+  try{
+    const res = await fetch('/.netlify/functions/wip-data', { headers:{'X-Submit-Key':key} });
+    const j = await res.json();
+    if(!res.ok) throw new Error(j.error || ('Failed to load ('+res.status+')'));
+    renderWipList(j.list || []);
+  }catch(err){
+    listEl.innerHTML = `<div class="empty-hint">Could not load — ${(err.message||err)}</div>`;
+  }
+}
+
+function renderWipList(list){
+  const listEl = document.getElementById('wipList');
+  if(!list.length){ listEl.innerHTML = '<div class="empty-hint">Nothing synced from another device yet — it appears here automatically a few seconds after you start working on it elsewhere.</div>'; return; }
+  list.sort((a,b)=> new Date(b.updatedAt) - new Date(a.updatedAt));
+  listEl.innerHTML = list.map(rec=>{
+    const d = new Date(rec.updatedAt);
+    const isCurrent = rec.slug === state.slug;
+    return `<div class="proj-row">
+      <div>
+        <div class="proj-name">${rec.meta && rec.meta.project || '(untitled)'} ${isCurrent ? '<span class="empty-hint" style="padding:0;">(currently open here)</span>' : ''}</div>
+        <div class="proj-sub">${rec.meta && rec.meta.stage ? stageLabel(rec.meta.stage) : ''} · last updated ${d.toLocaleDateString()} ${d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</div>
+      </div>
+      <div class="proj-actions">
+        <button class="icon-btn" data-action="continue-wip" data-slug="${rec.slug}" ${isCurrent?'disabled':''}>Continue here</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function continueFromCloud(slug, btnEl){
+  const key = await getSubmitKey();
+  if(!key) return;
+  const hasLocalProgress = Object.keys(state.items).length > 0 || state.meta.project;
+  if(hasLocalProgress && state.slug !== slug){
+    if(!confirm('This replaces what\'s currently open on this device with the cloud copy of that job. Anything not yet saved here will be lost. Continue?')) return;
+  }
+  if(btnEl){ btnEl.disabled = true; btnEl.textContent = 'Downloading…'; }
+  try{
+    let chunkIndex = 0, totalChunks = 1, assembled = '';
+    while(chunkIndex < totalChunks){
+      const res = await fetch(`/.netlify/functions/wip-data?download=${encodeURIComponent(slug)}&chunk=${chunkIndex}`, {
+        headers:{'X-Submit-Key':key}
+      });
+      const j = await res.json().catch(()=>({}));
+      if(!res.ok) throw new Error(j.error || ('Download failed (status '+res.status+')'));
+      assembled += j.chunkData;
+      totalChunks = j.totalChunks;
+      chunkIndex++;
+      if(btnEl && totalChunks>1) btnEl.textContent = `Downloading (${chunkIndex}/${totalChunks})…`;
+    }
+    const jsonText = decodeURIComponent(escape(atob(assembled)));
+    const rec = JSON.parse(jsonText);
+    if(!rec.meta || !rec.items) throw new Error('That cloud copy looked corrupted — try again, or use the manual Backup/Restore instead.');
+
+    await dbPut({slug, meta:rec.meta, items:rec.items, updatedAt:Date.now()});
+    state = {slug, meta: Object.assign(blankMeta(), rec.meta), items: rec.items, openSections:{}};
+    render();
+    document.getElementById('wipModal').classList.remove('show');
+    showToast('Continuing that inspection — picked up from your other device');
+  }catch(err){
+    alert('Could not continue that inspection: '+(err.message||err));
+  }finally{
+    if(btnEl){ btnEl.disabled = false; btnEl.textContent = 'Continue here'; }
   }
 }
 
