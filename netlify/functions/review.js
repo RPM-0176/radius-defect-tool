@@ -36,15 +36,33 @@ exports.handler = async (event) => {
     };
   }
 
+  // GitHub only inlines a file's content for files under ~1MB — beyond that
+  // this comes back empty even though the file exists. Fall back to the Git
+  // blob API, which reliably returns full base64 content up to 100MB.
+  async function ghGetRaw(path) {
+    const res = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/contents/${path}?ref=${branch}`, { headers: ghHeaders() });
+    if (res.status === 404) return { exists: false };
+    if (!res.ok) throw new Error('GitHub GET ' + path + ' failed (' + res.status + ')');
+    const j = await res.json();
+    if (j.content) return { exists: true, sha: j.sha, content: j.content };
+    if (j.sha) {
+      const blobRes = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/git/blobs/${j.sha}`, { headers: ghHeaders() });
+      if (blobRes.ok) {
+        const blobJson = await blobRes.json();
+        return { exists: true, sha: j.sha, content: (blobJson.content || '').replace(/\n/g, '') };
+      }
+    }
+    return { exists: true, sha: j.sha, content: '' };
+  }
+
   const regPath = 'reports/registry.json';
+  const DOWNLOAD_CHUNK_SIZE = 900000; // matches the upload chunk size used elsewhere
 
   async function getRegistry() {
-    const res = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/contents/${regPath}?ref=${branch}`, { headers: ghHeaders() });
-    if (res.status === 404) return { sha: null, list: [] };
-    if (!res.ok) throw new Error('Failed to read registry (' + res.status + ')');
-    const j = await res.json();
-    const list = JSON.parse(Buffer.from(j.content, 'base64').toString('utf-8'));
-    return { sha: j.sha, list };
+    const r = await ghGetRaw(regPath);
+    if (!r.exists) return { sha: null, list: [] };
+    const list = JSON.parse(Buffer.from(r.content, 'base64').toString('utf-8'));
+    return { sha: r.sha, list };
   }
 
   async function putRegistry(list, sha) {
@@ -61,20 +79,18 @@ exports.handler = async (event) => {
     if (!res.ok) throw new Error('Failed to write registry (' + res.status + ')');
   }
 
-  // ---- GET: view a specific report's PDF (proxied through GitHub's API) ----
+  // ---- GET: view a specific report's PDF, one chunk at a time (proxied through GitHub's API) ----
   if (event.httpMethod === 'GET' && event.queryStringParameters && event.queryStringParameters.pdf) {
     const slug = String(event.queryStringParameters.pdf).replace(/[^a-zA-Z0-9_\-]/g, '-');
+    const chunkIndex = parseInt((event.queryStringParameters.chunk || '0'), 10);
     const path = `reports/${slug}/defect-report.pdf`;
     try {
-      const res = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/contents/${path}?ref=${branch}`, { headers: ghHeaders() });
-      if (!res.ok) return { statusCode: res.status, body: JSON.stringify({ error: 'PDF not found for that report.' }) };
-      const j = await res.json();
-      return {
-        statusCode: 200,
-        headers: { 'Content-Type': 'application/pdf', 'Content-Disposition': `inline; filename="${slug}-defect-report.pdf"` },
-        body: (j.content || '').replace(/\n/g, ''),
-        isBase64Encoded: true
-      };
+      const r = await ghGetRaw(path);
+      if (!r.exists) return { statusCode: 404, body: JSON.stringify({ error: 'PDF not found for that report.' }) };
+      const fullBase64 = r.content;
+      const totalChunks = Math.max(Math.ceil(fullBase64.length / DOWNLOAD_CHUNK_SIZE), 1);
+      const chunkData = fullBase64.slice(chunkIndex * DOWNLOAD_CHUNK_SIZE, (chunkIndex + 1) * DOWNLOAD_CHUNK_SIZE);
+      return { statusCode: 200, body: JSON.stringify({ ok: true, chunkData, chunkIndex, totalChunks }) };
     } catch (err) {
       return { statusCode: 500, body: JSON.stringify({ error: String(err && err.message ? err.message : err) }) };
     }
