@@ -1452,9 +1452,19 @@ async function viewReportPdf(slug){
   const key = await getReviewKey();
   if(!key) return;
   try{
-    const res = await fetch('/.netlify/functions/review?pdf='+encodeURIComponent(slug), { headers:{'X-Review-Key':key} });
-    if(!res.ok){ const j = await res.json().catch(()=>({})); throw new Error(j.error||'PDF not found'); }
-    const blob = await res.blob();
+    let chunkIndex = 0, totalChunks = 1, assembled = '';
+    while(chunkIndex < totalChunks){
+      const res = await fetch(`/.netlify/functions/review?pdf=${encodeURIComponent(slug)}&chunk=${chunkIndex}`, { headers:{'X-Review-Key':key} });
+      const j = await res.json().catch(()=>({}));
+      if(!res.ok) throw new Error(j.error || 'PDF not found');
+      assembled += j.chunkData;
+      totalChunks = j.totalChunks;
+      chunkIndex++;
+    }
+    const byteChars = atob(assembled);
+    const byteNumbers = new Array(byteChars.length);
+    for(let i=0;i<byteChars.length;i++) byteNumbers[i] = byteChars.charCodeAt(i);
+    const blob = new Blob([new Uint8Array(byteNumbers)], {type:'application/pdf'});
     const url = URL.createObjectURL(blob);
     window.open(url, '_blank');
   }catch(err){
@@ -1513,9 +1523,19 @@ async function downloadMyPdf(slug){
   const key = await getSubmitKey();
   if(!key) return;
   try{
-    const res = await fetch('/.netlify/functions/my-reports?pdf='+encodeURIComponent(slug), { headers:{'X-Submit-Key':key} });
-    if(!res.ok){ const j = await res.json().catch(()=>({})); throw new Error(j.error||'Could not download that PDF'); }
-    const blob = await res.blob();
+    let chunkIndex = 0, totalChunks = 1, assembled = '';
+    while(chunkIndex < totalChunks){
+      const res = await fetch(`/.netlify/functions/my-reports?pdf=${encodeURIComponent(slug)}&chunk=${chunkIndex}`, { headers:{'X-Submit-Key':key} });
+      const j = await res.json().catch(()=>({}));
+      if(!res.ok) throw new Error(j.error || 'Could not download that PDF');
+      assembled += j.chunkData;
+      totalChunks = j.totalChunks;
+      chunkIndex++;
+    }
+    const byteChars = atob(assembled);
+    const byteNumbers = new Array(byteChars.length);
+    for(let i=0;i<byteChars.length;i++) byteNumbers[i] = byteChars.charCodeAt(i);
+    const blob = new Blob([new Uint8Array(byteNumbers)], {type:'application/pdf'});
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url; a.download = slug + '-defect-report.pdf';
