@@ -69,7 +69,21 @@ exports.handler = async (event) => {
     const res = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/contents/${path}?ref=${branch}`, { headers: ghHeaders() });
     if (res.status === 200) {
       const j = await res.json();
-      return { exists: true, sha: j.sha, content: j.content };
+      if (j.content) {
+        return { exists: true, sha: j.sha, content: j.content };
+      }
+      // GitHub only inlines content for files under ~1MB — beyond that this
+      // field comes back empty even though the file exists. Fall back to the
+      // Git blob API, which reliably returns full base64 content regardless
+      // of size (up to 100MB), using the sha the Contents API still gave us.
+      if (j.sha) {
+        const blobRes = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/git/blobs/${j.sha}`, { headers: ghHeaders() });
+        if (blobRes.ok) {
+          const blobJson = await blobRes.json();
+          return { exists: true, sha: j.sha, content: (blobJson.content || '').replace(/\n/g, '') };
+        }
+      }
+      return { exists: true, sha: j.sha, content: '' };
     }
     if (res.status === 404) return { exists: false };
     const t = await res.text();
@@ -149,6 +163,13 @@ exports.handler = async (event) => {
     const approxKB = Math.round((contentBase64.length * 0.75) / 1024);
     console.log(`[submit-inspection] writing ${safeFilename} for ${safeSlug} — approx ${approxKB}KB, kind=${kind}`);
 
+    // registry.json and wip-index.json are meant to stay small, lightweight
+    // lists — the actual photos already live inside the PDF/wip-data.json
+    // files themselves, so there's no need to duplicate a cover photo's
+    // base64 data inside these ledgers too (that's what caused them to
+    // outgrow GitHub's inline-content size and start failing to load).
+    const lightMeta = meta ? { ...meta, coverPhoto: undefined } : meta;
+
     const existing = await ghGetContent(finalPath);
     const putJson = await ghPutContent(
       finalPath, contentBase64,
@@ -163,7 +184,7 @@ exports.handler = async (event) => {
         let list = wipExisting.exists ? JSON.parse(Buffer.from(wipExisting.content, 'base64').toString('utf-8')) : [];
         const now = new Date().toISOString();
         const idx = list.findIndex(r => r.slug === safeSlug);
-        const entry = { slug: safeSlug, meta: meta || {}, submittedBy, updatedAt: now, path: finalPath };
+        const entry = { slug: safeSlug, meta: lightMeta || {}, submittedBy, updatedAt: now, path: finalPath };
         if (idx === -1) list.push(entry); else list[idx] = entry;
         await ghPutContent(
           wipIndexPath,
@@ -184,7 +205,7 @@ exports.handler = async (event) => {
         const now = new Date().toISOString();
         const idx = list.findIndex(r => r.slug === safeSlug);
         const entry = {
-          slug: safeSlug, meta: meta || {}, submittedBy, summary: summary || {},
+          slug: safeSlug, meta: lightMeta || {}, submittedBy, summary: summary || {},
           pdfPath: finalPath, submittedAt: now, status: 'pending', reviewedAt: null, reviewNote: ''
         };
         if (idx === -1) list.push(entry); else list[idx] = entry;
