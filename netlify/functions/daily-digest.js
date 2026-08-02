@@ -1,1 +1,453 @@
+// Radius Defect Checklist — daily digest
+//
+// Runs automatically each morning (see the schedule in netlify.toml) and
+// emails a summary of what needs attention, pulled from two places:
+//   1. This checklist tool's own records (reports/registry.json) — anything
+//      still Pending review, or sent back as Changes requested and not yet
+//      resubmitted.
+//   2. Your Monday.com "SDA Project Pipeline" board — current stage and the
+//      latest notes for every property, grouped by whoever's assigned to it.
+//
+// This does NOT touch anyone's email inbox — that's a separate, deliberately
+// unbuilt piece pending a conversation with Martin and Seb first.
+//
+// Required Netlify environment variables:
+//   GITHUB_TOKEN, GITHUB_OWNER, GITHUB_REPO, GITHUB_BRANCH (optional)
+//     — same ones the rest of the tool already uses.
+//   MONDAY_API_TOKEN       — a personal API token from Monday.com (Avatar → Admin → API)
+//   MONDAY_BOARD_ID        — defaults to 5025662448 (the SDA Project Pipeline board) if not set
+//   RESEND_API_KEY         — from resend.com, used to actually send the email
+//   DIGEST_FROM_EMAIL      — the "from" address (must be a verified sender/domain in Resend)
+//   DIGEST_TO_EMAIL        — who receives the FULL digest (you) — can be a comma-separated list
+//   DIGEST_TO_MARTIN       — optional; if set, Martin gets his own digest, filtered to just his properties/submissions
+//   DIGEST_TO_SEB          — optional; if set, Seb gets his own digest, filtered the same way
+
+const GITHUB_API = 'https://api.github.com';
+const MONDAY_API = 'https://api.monday.com/v2';
+const RESEND_API = 'https://api.resend.com/emails';
+
+// Every stage that has a "when this is planned/expected" date column on the
+// board, and — where the board tracks it — the matching "Actual X Date"
+// column. If the actual date is already filled in, that stage is genuinely
+// done, so a passed target date isn't worth flagging.
+const STAGE_DATE_COLUMNS = [
+  { label: 'Slab', dateCol: 'date_mkwp7vch', actualCol: 'date_mkxy5de6' },
+  { label: 'Frame', dateCol: 'date_mkwpbnzw', actualCol: 'date_mkxywm1s' },
+  { label: 'Lock Up', dateCol: 'date_mkwp73xe', actualCol: 'date_mkxyhkyb' },
+  { label: 'Rough-in', dateCol: 'date_mm5v5qzg', actualCol: 'date_mm5vwt9s' },
+  { label: 'Plaster', dateCol: 'date_mm3yczn3', actualCol: 'date_mm5vjcmx' },
+  { label: 'Painting', dateCol: 'date_mm3ybzvv', actualCol: 'date_mm5vxq6n' },
+  { label: 'Fixing', dateCol: 'date_mkwvtd9f', actualCol: 'date_mm2g2zwr' },
+  { label: 'Kitchen', dateCol: 'date_mm3yb0p7', actualCol: null },
+  { label: 'Kitchen Benchtops', dateCol: 'date_mm3yzb14', actualCol: null },
+  { label: 'Tiling', dateCol: 'date_mm3yvsqd', actualCol: null },
+  { label: 'Flooring', dateCol: 'date_mm3y5cbz', actualCol: null },
+  { label: 'Landscaping', dateCol: 'date_mm3yy9sy', actualCol: null },
+  { label: 'Paths & Driveways', dateCol: 'date_mm5v13jw', actualCol: 'date_mm5vswb4' },
+  { label: 'Practical Completion', dateCol: 'date_mm4eq9e9', actualCol: 'date_mm5v5k2w' },
+];
+const STAGE_DATE_WINDOW_DAYS = 2; // "reaching or just passed" window, in whole days
+const STALE_NOTES_DAYS = 5; // no change in the notes for this long → flag it
+const NOTES_SNAPSHOT_PATH = 'reports/monday-notes-snapshot.json';
+
+// Monday.com and the checklist tool now both have a real "Actual X Date"
+// confirmation for every one of these 10 stages — full parity, no fallbacks
+// needed anymore.
+const CROSS_CHECK_STAGES = [
+  { label: 'Slab', mondayPattern: /slab/i, actualCol: 'date_mkxy5de6', checklistStage: 'slab' },
+  { label: 'Frame', mondayPattern: /frame/i, actualCol: 'date_mkxywm1s', checklistStage: 'frame' },
+  { label: 'Lock Up', mondayPattern: /lock ?up/i, actualCol: 'date_mkxyhkyb', checklistStage: 'lockup' },
+  { label: 'Rough-in', mondayPattern: /rough.?in/i, actualCol: 'date_mm5vwt9s', checklistStage: 'rough_in' },
+  { label: 'Plaster', mondayPattern: /plaster/i, actualCol: 'date_mm5vjcmx', checklistStage: 'plaster' },
+  { label: 'Paint', mondayPattern: /paint/i, actualCol: 'date_mm5vxq6n', checklistStage: 'paint' },
+  { label: 'Fixing', mondayPattern: /fixing/i, actualCol: 'date_mm2g2zwr', checklistStage: 'fixing' },
+  { label: 'Paths & Driveways', mondayPattern: /landscap/i, actualCol: 'date_mm5vswb4', checklistStage: 'paths_driveways' },
+  { label: 'Landscaping', mondayPattern: /landscap/i, actualCol: null, checklistStage: 'landscaping' },
+  { label: 'Practical Completion', mondayPattern: /practical completion|defects inspection/i, actualCol: 'date_mm5v5k2w', checklistStage: 'practical_completion' },
+];
+const INSPECTION_LAG_DAYS = 2; // an inspection should follow within this many days
+const MAX_LOOKBACK_DAYS = 30; // don't flag anything older than this — likely predates the tool being in use
+
+// Monday.com and the checklist tool format the same address differently
+// ("41 A SEPARATION ST FAIRFIELD VIC 3078" vs "41a Separation St, Fairfield").
+// This normalizes both down to a comparable core so they can be matched.
+function normalizeAddress(str) {
+  let s = (str || '').toLowerCase();
+  s = s.replace(/\b(vic|nsw|qld|sa|wa|tas|nt|act)\b/g, '');
+  s = s.replace(/\b\d{4}\b/g, ''); // postcode
+  s = s.replace(/[,.]/g, ' ');
+  s = s.replace(/\bstreet\b/g, 'st').replace(/\bavenue\b/g, 'ave').replace(/\broad\b/g, 'rd')
+    .replace(/\bcourt\b/g, 'ct').replace(/\bdrive\b/g, 'dr').replace(/\bgrove\b/g, 'gr')
+    .replace(/\bplace\b/g, 'pl').replace(/\bcrescent\b/g, 'cres').replace(/\bterrace\b/g, 'tce');
+  s = s.replace(/^(\d+)\s+([a-z])\b/, '$1$2'); // "41 a separation" -> "41a separation"
+  s = s.replace(/\s+/g, ' ').trim();
+  return s;
+}
+
+function addressesMatch(a, b) {
+  const na = normalizeAddress(a), nb = normalizeAddress(b);
+  if (!na || !nb) return false;
+  const tokensA = na.split(' ').filter(Boolean);
+  const tokensB = nb.split(' ').filter(Boolean);
+  if (!tokensA.length || !tokensB.length) return false;
+  const [shorter, longer] = tokensA.length <= tokensB.length ? [tokensA, tokensB] : [tokensB, tokensA];
+  return shorter.every(t => longer.includes(t));
+}
+
+// Matches a first name ("Martin") against either a checklist tool's
+// submittedBy value ("Martin") or a Monday.com person field ("Martin Green",
+// or a joint job like "Martin Green, Seb Donald").
+function personMatches(text, firstName) {
+  if (!text || !firstName) return false;
+  return text.toLowerCase().includes(firstName.toLowerCase());
+}
+
+exports.handler = async () => {
+  const token = process.env.GITHUB_TOKEN;
+  const owner = process.env.GITHUB_OWNER;
+  const repo = process.env.GITHUB_REPO;
+  const branch = process.env.GITHUB_BRANCH || 'main';
+  const mondayToken = process.env.MONDAY_API_TOKEN;
+  const mondayBoardId = process.env.MONDAY_BOARD_ID || '5025662448';
+  const resendKey = process.env.RESEND_API_KEY;
+  const fromEmail = process.env.DIGEST_FROM_EMAIL;
+  const toEmail = process.env.DIGEST_TO_EMAIL;
+
+  const missing = [];
+  if (!token || !owner || !repo) missing.push('GITHUB_TOKEN/GITHUB_OWNER/GITHUB_REPO');
+  if (!resendKey) missing.push('RESEND_API_KEY');
+  if (!fromEmail) missing.push('DIGEST_FROM_EMAIL');
+  if (!toEmail) missing.push('DIGEST_TO_EMAIL');
+  if (missing.length) {
+    console.error('[daily-digest] Missing required env vars:', missing.join(', '));
+    return { statusCode: 500, body: 'Missing env vars: ' + missing.join(', ') };
+  }
+
+  function ghHeaders() {
+    return {
+      'Authorization': `Bearer ${token}`,
+      'Accept': 'application/vnd.github+json',
+      'Content-Type': 'application/json',
+      'User-Agent': 'radius-defect-checklist-tool'
+    };
+  }
+
+  // Same large-file-safe fetch used throughout the rest of the tool.
+  async function ghGetRaw(path) {
+    const res = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/contents/${path}?ref=${branch}`, { headers: ghHeaders() });
+    if (res.status === 404) return { exists: false };
+    if (!res.ok) throw new Error('GitHub GET ' + path + ' failed (' + res.status + ')');
+    const j = await res.json();
+    if (j.content) return { exists: true, content: j.content };
+    if (j.sha) {
+      const blobRes = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/git/blobs/${j.sha}`, { headers: ghHeaders() });
+      if (blobRes.ok) {
+        const blobJson = await blobRes.json();
+        return { exists: true, content: (blobJson.content || '').replace(/\n/g, '') };
+      }
+    }
+    return { exists: true, content: '' };
+  }
+
+  function daysAgo(isoString) {
+    if (!isoString) return null;
+    const diffMs = Date.now() - new Date(isoString).getTime();
+    return Math.max(Math.floor(diffMs / (1000 * 60 * 60 * 24)), 0);
+  }
+
+  // ---- 1. Checklist tool: pending review + changes requested ----
+  let pending = [];
+  let changesRequested = [];
+  let fullRegistry = [];
+  try {
+    const reg = await ghGetRaw('reports/registry.json');
+    fullRegistry = reg.exists ? JSON.parse(Buffer.from(reg.content, 'base64').toString('utf-8')) : [];
+    pending = fullRegistry.filter(r => r.status === 'pending')
+      .sort((a, b) => new Date(a.submittedAt) - new Date(b.submittedAt));
+    changesRequested = fullRegistry.filter(r => r.status === 'changes_requested')
+      .sort((a, b) => new Date(a.reviewedAt || a.submittedAt) - new Date(b.reviewedAt || b.submittedAt));
+  } catch (err) {
+    console.error('[daily-digest] Failed to read checklist registry (non-fatal):', err.message);
+  }
+
+  // Has ANY inspection — pending, approved, or changes-requested, doesn't
+  // matter which — ever been submitted for this address at this stage?
+  // Submitting counts as "an inspection happened," regardless of its review
+  // status; that's a separate concern from whether it happened at all.
+  // checklistStage may be a single stage key or an array of acceptable ones
+  // (used where Monday.com doesn't distinguish between two checklist stages).
+  function hasChecklistSubmission(address, checklistStage) {
+    const acceptable = Array.isArray(checklistStage) ? checklistStage : [checklistStage];
+    return fullRegistry.some(r =>
+      r.meta && acceptable.includes(r.meta.stage) && addressesMatch(r.meta.project || '', address)
+    );
+  }
+
+  // ---- 2. Monday.com: current stage + notes per property, grouped by person ----
+  let mondayByPerson = {};
+  let mondayError = null;
+  if (mondayToken) {
+    try {
+      const allDateColIds = STAGE_DATE_COLUMNS.flatMap(sc => [sc.dateCol, sc.actualCol]).filter(Boolean);
+      const colIds = ['multiple_person_mm5tfgfv', 'color_mksch3zh', 'long_text_mky5c0rm', ...allDateColIds];
+      const query = `query {
+        boards(ids: ${mondayBoardId}) {
+          items_page(limit: 100) {
+            items {
+              id
+              name
+              column_values(ids: ${JSON.stringify(colIds)}) {
+                id
+                text
+              }
+            }
+          }
+        }
+      }`;
+      const res = await fetch(MONDAY_API, {
+        method: 'POST',
+        headers: { 'Authorization': mondayToken, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query })
+      });
+      const json = await res.json();
+      if (json.errors) throw new Error(JSON.stringify(json.errors));
+
+      // Load yesterday's snapshot — tracks both the notes text (to detect
+      // real changes) and which stage each item was on last time we checked
+      // (to know when it first arrived at a stage, for stages that don't
+      // have an Actual-date column filled in yet).
+      let snapshot = {};
+      try {
+        const snapR = await ghGetRaw(NOTES_SNAPSHOT_PATH);
+        if (snapR.exists) snapshot = JSON.parse(Buffer.from(snapR.content, 'base64').toString('utf-8'));
+      } catch (snapErr) {
+        console.error('[daily-digest] Failed to read notes snapshot (non-fatal, treating as first run):', snapErr.message);
+      }
+      const nowIso = new Date().toISOString();
+      const updatedSnapshot = { ...snapshot };
+      const now = new Date();
+      const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+      const items = json.data.boards[0].items_page.items;
+      for (const item of items) {
+        const cols = Object.fromEntries(item.column_values.map(c => [c.id, c.text]));
+        const person = (cols['multiple_person_mm5tfgfv'] || '').trim();
+        const stage = (cols['color_mksch3zh'] || '').trim();
+        const notes = (cols['long_text_mky5c0rm'] || '').trim();
+
+        if (!item.name || item.name === 'New Item') continue; // placeholder/template row
+        if (/template|copy/i.test(item.name)) continue; // e.g. "Template to copy and RE-Name..."
+        if (!stage && !notes) continue; // nothing informative to show
+        // This digest is specifically for Martin and Seb — skip anything not
+        // assigned to (at least) one of them, e.g. Jason's own properties or
+        // anything still Unassigned.
+        if (!/martin green|seb donald/i.test(person)) continue;
+
+        const prior = snapshot[item.id] || {};
+
+        // ---- Notes: only show what's actually new since yesterday ----
+        let notesDisplay, staleFlag = null;
+        if (!notes) {
+          notesDisplay = null;
+        } else if (prior.text === notes) {
+          const daysSince = Math.floor((Date.now() - new Date(prior.since).getTime()) / (1000*60*60*24));
+          notesDisplay = `No update since ${new Date(prior.since).toLocaleDateString('en-AU')} (${daysSince} day${daysSince===1?'':'s'} ago)`;
+          if (daysSince >= STALE_NOTES_DAYS) staleFlag = `\u26a0\ufe0f No update in ${daysSince} days \u2014 may need follow-up`;
+        } else {
+          notesDisplay = notes;
+        }
+        updatedSnapshot[item.id] = {
+          ...(updatedSnapshot[item.id] || {}),
+          text: notes, since: (prior.text === notes && prior.since) ? prior.since : nowIso
+        };
+
+        // ---- Stage dates: flag anything reaching or just past its target ----
+        const dateFlags = [];
+        for (const sc of STAGE_DATE_COLUMNS) {
+          const dateStr = cols[sc.dateCol];
+          if (!dateStr) continue;
+          if (sc.actualCol && cols[sc.actualCol]) continue; // already actually completed
+          const target = new Date(dateStr + 'T00:00:00');
+          if (isNaN(target.getTime())) continue;
+          const dayDiff = Math.round((target.getTime() - todayMidnight.getTime()) / (1000 * 60 * 60 * 24));
+          if (dayDiff >= -STAGE_DATE_WINDOW_DAYS && dayDiff <= STAGE_DATE_WINDOW_DAYS) {
+            if (dayDiff === 0) dateFlags.push(`${sc.label} due today (${dateStr})`);
+            else if (dayDiff > 0) dateFlags.push(`${sc.label} due ${dateStr} (in ${dayDiff} day${dayDiff===1?'':'s'})`);
+            else dateFlags.push(`${sc.label} was due ${dateStr} \u2014 overdue by ${-dayDiff} day${dayDiff===-1?'':'s'}`);
+          }
+        }
+
+        // ---- Track when the current stage was first seen, for the cross-check ----
+        const priorStageInfo = (prior.stage === stage) ? prior : null;
+        const stageSince = priorStageInfo && priorStageInfo.stageSince ? priorStageInfo.stageSince : nowIso;
+        updatedSnapshot[item.id].stage = stage;
+        updatedSnapshot[item.id].stageSince = stageSince;
+
+        // ---- Cross-check: was an inspection actually submitted for this stage? ----
+        const inspectionFlags = [];
+        for (const cc of CROSS_CHECK_STAGES) {
+          const actualDate = cols[cc.actualCol];
+          let triggerDate = null, source = null;
+          if (actualDate) {
+            triggerDate = new Date(actualDate + 'T00:00:00');
+            source = `Actual ${cc.label} Date (${actualDate})`;
+          } else if (cc.mondayPattern.test(stage)) {
+            triggerDate = new Date(stageSince);
+            source = `flagged as ${stage} on ${new Date(stageSince).toLocaleDateString('en-AU')}`;
+          }
+          if (!triggerDate || isNaN(triggerDate.getTime())) continue;
+          const daysSinceTrigger = Math.floor((now.getTime() - triggerDate.getTime()) / (1000*60*60*24));
+          if (daysSinceTrigger < INSPECTION_LAG_DAYS) continue;
+          // Don't reach back into project history from before this tool was
+          // even in use — a stage completed a year ago was never going to
+          // get a checklist inspection logged for it, and flagging it isn't
+          // a missed follow-up, just noise.
+          if (daysSinceTrigger > MAX_LOOKBACK_DAYS) continue;
+          if (hasChecklistSubmission(item.name, cc.checklistStage)) continue;
+          inspectionFlags.push(`No ${cc.label} inspection found \u2014 ${daysSinceTrigger} day${daysSinceTrigger===1?'':'s'} since ${source}`);
+        }
+
+        if (!mondayByPerson[person]) mondayByPerson[person] = [];
+        mondayByPerson[person].push({ name: item.name, stage, notesDisplay, staleFlag, dateFlags, inspectionFlags });
+      }
+
+      // Save the updated snapshot for tomorrow's comparison.
+      try {
+        const snapExisting = await ghGetRaw(NOTES_SNAPSHOT_PATH);
+        await fetch(`${GITHUB_API}/repos/${owner}/${repo}/contents/${NOTES_SNAPSHOT_PATH}`, {
+          method: 'PUT',
+          headers: ghHeaders(),
+          body: JSON.stringify({
+            message: 'Update Monday.com notes snapshot',
+            content: Buffer.from(JSON.stringify(updatedSnapshot, null, 2), 'utf-8').toString('base64'),
+            branch,
+            ...(snapExisting.exists ? {} : {})
+          })
+        });
+      } catch (saveErr) {
+        console.error('[daily-digest] Failed to save notes snapshot (non-fatal):', saveErr.message);
+      }
+    } catch (err) {
+      mondayError = err.message;
+      console.error('[daily-digest] Monday.com fetch failed (non-fatal):', err.message);
+    }
+  }
+
+  // ---- 3. Compose the email — either the full picture, or filtered to one person ----
+  const today = new Date().toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+
+  function buildDigestHtml(onlyFirstName) {
+    const scopedPending = onlyFirstName ? pending.filter(r => personMatches(r.submittedBy, onlyFirstName)) : pending;
+    const scopedChangesRequested = onlyFirstName ? changesRequested.filter(r => personMatches(r.submittedBy, onlyFirstName)) : changesRequested;
+    const personKeys = onlyFirstName
+      ? Object.keys(mondayByPerson).filter(k => personMatches(k, onlyFirstName))
+      : Object.keys(mondayByPerson).sort();
+
+    let html = `<div style="font-family:sans-serif;color:#222;max-width:640px;">`;
+    html += `<h2 style="color:#1B2430;border-bottom:2px solid #1B2430;padding-bottom:8px;">Radius Daily Digest \u2014 ${today}</h2>`;
+
+    html += `<h3 style="color:#1B2430;">Checklist tool</h3>`;
+    if (scopedPending.length === 0 && scopedChangesRequested.length === 0) {
+      html += `<p style="color:#3C7A5C;">Review queue is clear \u2014 nothing pending, nothing sent back.</p>`;
+    } else {
+      if (scopedPending.length) {
+        html += `<p><b>Pending review (${scopedPending.length}):</b></p><ul>`;
+        for (const r of scopedPending) {
+          const d = daysAgo(r.submittedAt);
+          html += `<li>${r.meta && r.meta.project || r.slug} \u2014 submitted by ${r.submittedBy}, ${d} day${d === 1 ? '' : 's'} ago</li>`;
+        }
+        html += `</ul>`;
+      }
+      if (scopedChangesRequested.length) {
+        html += `<p><b>Changes requested, not yet resubmitted (${scopedChangesRequested.length}):</b></p><ul>`;
+        for (const r of scopedChangesRequested) {
+          const d = daysAgo(r.reviewedAt);
+          html += `<li>${r.meta && r.meta.project || r.slug} \u2014 ${r.submittedBy}, ${d} day${d === 1 ? '' : 's'} since feedback${r.reviewNote ? ' \u2014 "' + r.reviewNote + '"' : ''}</li>`;
+        }
+        html += `</ul>`;
+      }
+    }
+
+    html += `<h3 style="color:#1B2430;">Project pipeline (Monday.com)</h3>`;
+    if (mondayError) {
+      html += `<p style="color:#A8461F;">Couldn't load the Monday.com board today: ${mondayError}</p>`;
+    } else if (personKeys.length === 0) {
+      html += `<p>${onlyFirstName ? 'Nothing currently assigned to you on the board.' : 'No Monday.com token configured, or no items found.'}</p>`;
+    } else {
+      for (const person of personKeys) {
+        html += `<p><b>${person}</b></p><ul>`;
+        for (const p of mondayByPerson[person]) {
+          html += `<li>${p.name} \u2014 <i>${p.stage}</i>`;
+          if (p.dateFlags && p.dateFlags.length) {
+            html += `<br><span style="color:#A8461F;font-weight:bold;font-size:0.9em;">\ud83d\udcc5 ${p.dateFlags.join(' \u00b7 ')}</span>`;
+          }
+          if (p.inspectionFlags && p.inspectionFlags.length) {
+            for (const flag of p.inspectionFlags) {
+              html += `<br><span style="color:#A8461F;font-weight:bold;font-size:0.9em;">\u26a0\ufe0f ${flag}</span>`;
+            }
+          }
+          if (p.staleFlag) {
+            html += `<br><span style="color:#A8461F;font-size:0.9em;">${p.staleFlag}</span>`;
+          }
+          if (p.notesDisplay) {
+            html += `<br><span style="color:#666;font-size:0.9em;">${p.notesDisplay.replace(/\n/g, '<br>')}</span>`;
+          }
+          html += `</li>`;
+        }
+        html += `</ul>`;
+      }
+    }
+
+    html += `<p style="color:#999;font-size:0.85em;margin-top:24px;">Automated daily digest from the Radius defect checklist tool.</p>`;
+    html += `</div>`;
+    return html;
+  }
+
+  // ---- 4. Send it — the full picture to Jason, plus a filtered copy each to Martin and Seb if configured ----
+  async function sendDigestEmail(to, html, label) {
+    try {
+      const sendRes = await fetch(RESEND_API, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${resendKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          from: fromEmail,
+          to: to.split(',').map(s => s.trim()),
+          subject: `Radius Daily Digest \u2014 ${today}`,
+          html
+        })
+      });
+      if (!sendRes.ok) {
+        const errText = await sendRes.text();
+        console.error(`[daily-digest] Resend send failed for ${label}:`, sendRes.status, errText);
+        return false;
+      }
+      console.log(`[daily-digest] Sent successfully to ${label} (${to})`);
+      return true;
+    } catch (err) {
+      console.error(`[daily-digest] Failed to send to ${label}:`, err.message);
+      return false;
+    }
+  }
+
+  const jobs = [{ to: toEmail, filter: null, label: 'Jason (full digest)' }];
+  if (process.env.DIGEST_TO_MARTIN) jobs.push({ to: process.env.DIGEST_TO_MARTIN, filter: 'Martin', label: "Martin's own digest" });
+  if (process.env.DIGEST_TO_SEB) jobs.push({ to: process.env.DIGEST_TO_SEB, filter: 'Seb', label: "Seb's own digest" });
+
+  const results = [];
+  for (const job of jobs) {
+    const html = buildDigestHtml(job.filter);
+    const ok = await sendDigestEmail(job.to, html, job.label);
+    results.push({ label: job.label, ok });
+  }
+
+  const primaryOk = results[0].ok; // Jason's full digest — if this fails, the run genuinely failed
+  const failedOthers = results.slice(1).filter(r => !r.ok);
+  if (!primaryOk) {
+    return { statusCode: 500, body: 'Failed to send main digest to Jason' };
+  }
+  if (failedOthers.length) {
+    console.error('[daily-digest] Some personalised digests failed to send:', failedOthers.map(r => r.label).join(', '));
+  }
+  return { statusCode: 200, body: `Digest sent (${results.filter(r=>r.ok).length}/${results.length} recipients)` };
+};
 
