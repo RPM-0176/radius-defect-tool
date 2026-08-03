@@ -1,19 +1,1 @@
-[build]
-  publish = "."
-  functions = "netlify/functions"
-
-[functions]
-  node_bundler = "esbuild"
-
-[functions."daily-digest"]
-  schedule = "30 20 * * *"
-
-[functions."generate-investor-reports"]
-  schedule = "30 20 1 * *"
-
-[[headers]]
-  for = "/*"
-  [headers.values]
-    X-Frame-Options = "DENY"
-    X-Content-Type-Options = "nosniff"
 
