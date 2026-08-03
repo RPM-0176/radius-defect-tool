@@ -358,6 +358,19 @@ textarea.notes:focus{outline:2px solid var(--steel-2);outline-offset:-1px;}
       </select>
     </div>
     <div id="reviewList"></div>
+
+    <div style="margin-top:22px;border-top:1px solid var(--line);padding-top:14px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <h4 style="margin:0;font-size:14px;">Site visits</h4>
+        <select id="siteVisitReviewFilter" style="padding:6px 8px;border:1px solid var(--line);border-radius:6px;font-size:12px;background:#fff;">
+          <option value="pending" selected>Pending</option>
+          <option value="approved">Approved</option>
+          <option value="all">All</option>
+        </select>
+      </div>
+      <div id="siteVisitReviewList"></div>
+    </div>
+
     <div style="margin-top:14px;text-align:right;">
       <button class="btn btn-sm" data-action="close-review-modal">Close</button>
     </div>
@@ -879,6 +892,7 @@ document.addEventListener('click', async (e)=>{
   else if(action==='refresh-site-visits'){ loadRecentSiteVisits(); }
   else if(action==='edit-site-visit'){ openSiteVisitForEdit(t.dataset.id); }
   else if(action==='share-site-visit'){ shareSiteVisit(t.dataset.id); }
+  else if(action==='approve-site-visit-review'){ approveSiteVisitReview(t.dataset.id, t.closest('button')); }
   else if(action==='open-investor-reports'){ openInvestorReports(); }
   else if(action==='close-investor-reports-modal'){
     document.getElementById('investorReportsModal').classList.remove('show');
@@ -931,6 +945,7 @@ document.addEventListener('change', (e)=>{
   if(e.target.id==='submitKey'){ setSetting({submitKey: e.target.value}); }
   if(e.target.id==='reviewKey'){ setSetting({reviewKey: e.target.value}); }
   if(e.target.id==='reviewFilter'){ applyReviewFilters(); }
+  if(e.target.id==='siteVisitReviewFilter'){ applySiteVisitReviewFilters(); }
   if(e.target.id==='m_stage'){
     const newStage = e.target.value;
     if(newStage === state.meta.stage) return;
@@ -1539,7 +1554,7 @@ async function submitSiteVisit(){
       await submitFileToCentral(visitId, filename, p.dataUrl.split(',')[1], null, 'site_visit_photo', null, key);
       newPhotoRefs.push(filename);
     }
-    const visitRecord = { project, date, loggedBy, attendees, notes, photos: existingVisitPhotoRefs.concat(newPhotoRefs), loggedAt: new Date().toISOString() };
+    const visitRecord = { project, date, loggedBy, attendees, notes, photos: existingVisitPhotoRefs.concat(newPhotoRefs), loggedAt: new Date().toISOString(), status:'pending', reviewedAt:null };
     const visitBase64 = btoa(unescape(encodeURIComponent(JSON.stringify(visitRecord, null, 2))));
     await submitFileToCentral(visitId, 'visit.json', visitBase64, null, 'site_visit', null, key);
 
@@ -1605,6 +1620,69 @@ async function openReviewQueue(){
     applyReviewFilters();
   }catch(err){
     listEl.innerHTML = `<div class="empty-hint">Could not load the review queue — ${ (err.message||err) }</div>`;
+  }
+  loadSiteVisitReviewList(key);
+}
+
+let lastSiteVisitReviewList = [];
+
+async function loadSiteVisitReviewList(key){
+  const listEl = document.getElementById('siteVisitReviewList');
+  listEl.innerHTML = '<div class="empty-hint">Loading…</div>';
+  document.getElementById('siteVisitReviewFilter').value = 'pending';
+  try{
+    const res = await fetch('/.netlify/functions/site-visits', { headers:{'X-Review-Key':key} });
+    const j = await res.json();
+    if(!res.ok) throw new Error(j.error || ('Failed to load ('+res.status+')'));
+    lastSiteVisitReviewList = j.visits || [];
+    applySiteVisitReviewFilters();
+  }catch(err){
+    listEl.innerHTML = `<div class="empty-hint">Could not load site visits — ${ (err.message||err) }</div>`;
+  }
+}
+
+function applySiteVisitReviewFilters(){
+  const filter = document.getElementById('siteVisitReviewFilter').value;
+  let list = lastSiteVisitReviewList;
+  if(filter === 'pending') list = list.filter(v => v.status !== 'approved');
+  else if(filter === 'approved') list = list.filter(v => v.status === 'approved');
+  renderSiteVisitReviewList(list);
+}
+
+function renderSiteVisitReviewList(list){
+  const listEl = document.getElementById('siteVisitReviewList');
+  if(!list.length){ listEl.innerHTML = '<div class="empty-hint">Nothing here.</div>'; return; }
+  listEl.innerHTML = list.map(v=>{
+    const d = new Date(v.date);
+    return `<div class="proj-row" style="align-items:flex-start;">
+      <div>
+        <div class="proj-name">${v.project} <span class="empty-hint" style="padding:0;">${v.status==='approved' ? '✅ Approved' : '⏳ Pending'}</span></div>
+        <div class="proj-sub">${d.toLocaleDateString('en-AU')} · logged by ${v.loggedBy||'—'}${v.attendees ? ' · attendees: '+v.attendees : ''}${v.photos&&v.photos.length ? ' · '+v.photos.length+' photo'+(v.photos.length===1?'':'s') : ''}</div>
+        ${v.notes ? `<div style="font-size:12.5px;color:#3a3a3a;margin-top:4px;white-space:pre-wrap;">${v.notes}</div>` : ''}
+      </div>
+      <div class="proj-actions">
+        ${v.status!=='approved' ? `<button class="icon-btn" data-action="approve-site-visit-review" data-id="${v.id}">Approve</button>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function approveSiteVisitReview(id, btnEl){
+  const key = await getReviewKey();
+  if(!key) return;
+  if(btnEl){ btnEl.disabled = true; btnEl.textContent = 'Approving…'; }
+  try{
+    const res = await fetch('/.netlify/functions/site-visits', {
+      method:'POST', headers:{'Content-Type':'application/json','X-Review-Key':key},
+      body: JSON.stringify({id, action:'approve'})
+    });
+    const j = await res.json().catch(()=>({}));
+    if(!res.ok) throw new Error(j.error || 'Approve failed');
+    showToast('Site visit approved');
+    loadSiteVisitReviewList(key);
+  }catch(err){
+    alert('Could not approve: '+(err.message||err));
+    if(btnEl){ btnEl.disabled = false; btnEl.textContent = 'Approve'; }
   }
 }
 
