@@ -877,6 +877,8 @@ document.addEventListener('click', async (e)=>{
     renderSiteVisitPhotos();
   }
   else if(action==='refresh-site-visits'){ loadRecentSiteVisits(); }
+  else if(action==='edit-site-visit'){ openSiteVisitForEdit(t.dataset.id); }
+  else if(action==='share-site-visit'){ shareSiteVisit(t.dataset.id); }
   else if(action==='open-investor-reports'){ openInvestorReports(); }
   else if(action==='close-investor-reports-modal'){
     document.getElementById('investorReportsModal').classList.remove('show');
@@ -1407,6 +1409,8 @@ async function submitFileToCentral(slug, filename, contentBase64, meta, kind, su
 let siteVisitState = { project:'', date:'', loggedBy:'', attendees:'', notes:'', photos:[] };
 
 function openSiteVisitModal(){
+  editingVisitId = null;
+  existingVisitPhotoRefs = [];
   siteVisitState = {
     project: state.meta.project || '',
     date: new Date().toISOString().slice(0,10),
@@ -1417,9 +1421,42 @@ function openSiteVisitModal(){
   document.getElementById('sv_loggedby').value = '';
   document.getElementById('sv_attendees').value = '';
   document.getElementById('sv_notes').value = '';
+  document.querySelector('[data-action="submit-site-visit"]').textContent = 'Save site visit';
   renderSiteVisitPhotos();
   document.getElementById('siteVisitModal').classList.add('show');
   loadRecentSiteVisits();
+}
+
+function openSiteVisitForEdit(id){
+  const v = lastLoadedSiteVisits.find(x=>x.id===id);
+  if(!v) return;
+  editingVisitId = id;
+  existingVisitPhotoRefs = v.photos || [];
+  siteVisitState = { project:v.project, date:v.date, loggedBy:v.loggedBy||'', attendees:v.attendees||'', notes:v.notes||'', photos:[] };
+  document.getElementById('sv_project').value = v.project || '';
+  document.getElementById('sv_date').value = v.date || '';
+  document.getElementById('sv_loggedby').value = v.loggedBy || '';
+  document.getElementById('sv_attendees').value = v.attendees || '';
+  document.getElementById('sv_notes').value = v.notes || '';
+  document.querySelector('[data-action="submit-site-visit"]').textContent = 'Update site visit';
+  renderSiteVisitPhotos();
+  showToast('Editing existing visit — saving will update it, not create a new one');
+}
+
+async function shareSiteVisit(id){
+  const v = lastLoadedSiteVisits.find(x=>x.id===id);
+  if(!v) return;
+  const d = new Date(v.date).toLocaleDateString('en-AU');
+  const text = `Site visit — ${v.project}
+${d}${v.loggedBy?'\nLogged by: '+v.loggedBy:''}${v.attendees?'\nAttendees: '+v.attendees:''}
+
+${v.notes||''}`;
+  if(navigator.share){
+    try{ await navigator.share({title:'Site visit — '+v.project, text}); }
+    catch(err){ if(err.name !== 'AbortError') alert('Could not share: '+(err.message||err)); }
+  } else {
+    window.location.href = `mailto:?subject=${encodeURIComponent('Site visit — '+v.project)}&body=${encodeURIComponent(text)}`;
+  }
 }
 
 async function loadRecentSiteVisits(){
@@ -1437,16 +1474,24 @@ async function loadRecentSiteVisits(){
   }
 }
 
+let editingVisitId = null;
+let existingVisitPhotoRefs = [];
+let lastLoadedSiteVisits = [];
+
 function renderRecentSiteVisits(visits){
+  lastLoadedSiteVisits = visits;
   const listEl = document.getElementById('recentSiteVisitsList');
   if(!visits.length){ listEl.innerHTML = '<div class="empty-hint">No site visits logged yet.</div>'; return; }
   listEl.innerHTML = visits.slice(0,15).map(v=>{
     const d = new Date(v.date);
     return `<div class="proj-row">
-      <div>
+      <div style="cursor:pointer;" data-action="edit-site-visit" data-id="${v.id}">
         <div class="proj-name">${v.project}</div>
         <div class="proj-sub">${d.toLocaleDateString('en-AU')} · ${v.loggedBy||'—'}${v.photos&&v.photos.length?' · '+v.photos.length+' photo'+(v.photos.length===1?'':'s'):''}</div>
         ${v.notes ? `<div class="empty-hint" style="padding:2px 0 0;">${v.notes.length>120?v.notes.slice(0,120)+'…':v.notes}</div>` : ''}
+      </div>
+      <div class="proj-actions">
+        <button class="icon-btn" data-action="share-site-visit" data-id="${v.id}">Send</button>
       </div>
     </div>`;
   }).join('');
@@ -1454,6 +1499,9 @@ function renderRecentSiteVisits(visits){
 
 function renderSiteVisitPhotos(){
   const row = document.getElementById('siteVisitPhotoRow');
+  const existingNote = existingVisitPhotoRefs.length
+    ? `<div class="empty-hint" style="width:100%;padding:2px 0 4px;">Already attached: ${existingVisitPhotoRefs.join(', ')} (adding new photos below keeps these too)</div>`
+    : '';
   const thumbs = siteVisitState.photos.map((p,i)=>`
     <div class="thumb">
       <img src="${p.dataUrl}" alt="site visit photo">
@@ -1461,6 +1509,7 @@ function renderSiteVisitPhotos(){
       <button class="rm" data-action="remove-site-visit-photo" data-idx="${i}">&times;</button>
     </div>`).join('');
   row.innerHTML = `
+    ${existingNote}
     <label class="photo-btn">+ Photo
       <input type="file" accept="image/*" capture="environment" multiple data-action="add-site-visit-photo">
     </label>
@@ -1478,28 +1527,28 @@ async function submitSiteVisit(){
   const attendees = document.getElementById('sv_attendees').value.trim();
   const notes = document.getElementById('sv_notes').value.trim();
 
-  const visitId = slugify(project, date, 'visit') + '-' + Math.random().toString(36).slice(2,6);
+  const visitId = editingVisitId || (slugify(project, date, 'visit') + '-' + Math.random().toString(36).slice(2,6));
 
   const btn = document.querySelector('[data-action="submit-site-visit"]');
-  if(btn){ btn.disabled = true; btn.textContent = 'Saving…'; }
+  if(btn){ btn.disabled = true; btn.textContent = editingVisitId ? 'Updating…' : 'Saving…'; }
   try{
-    const photoRefs = [];
+    const newPhotoRefs = [];
     for(let i=0; i<siteVisitState.photos.length; i++){
       const p = siteVisitState.photos[i];
-      const filename = `photo-${i}.jpg`;
+      const filename = `photo-${existingVisitPhotoRefs.length + i}.jpg`;
       await submitFileToCentral(visitId, filename, p.dataUrl.split(',')[1], null, 'site_visit_photo', null, key);
-      photoRefs.push(filename);
+      newPhotoRefs.push(filename);
     }
-    const visitRecord = { project, date, loggedBy, attendees, notes, photos: photoRefs, loggedAt: new Date().toISOString() };
+    const visitRecord = { project, date, loggedBy, attendees, notes, photos: existingVisitPhotoRefs.concat(newPhotoRefs), loggedAt: new Date().toISOString() };
     const visitBase64 = btoa(unescape(encodeURIComponent(JSON.stringify(visitRecord, null, 2))));
     await submitFileToCentral(visitId, 'visit.json', visitBase64, null, 'site_visit', null, key);
 
     document.getElementById('siteVisitModal').classList.remove('show');
-    showToast('Site visit logged — filed under ' + project);
+    showToast((editingVisitId ? 'Site visit updated — ' : 'Site visit logged — ') + 'filed under ' + project);
   }catch(err){
     alert('Could not save that site visit: '+(err.message||err));
   }finally{
-    if(btn){ btn.disabled = false; btn.textContent = 'Save site visit'; }
+    if(btn){ btn.disabled = false; btn.textContent = editingVisitId ? 'Update site visit' : 'Save site visit'; }
   }
 }
 
@@ -2248,4 +2297,3 @@ function exportFullChecklist(){
 </script>
 </body>
 </html>
-
