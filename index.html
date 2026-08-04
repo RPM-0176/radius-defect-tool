@@ -852,6 +852,7 @@ document.addEventListener('click', async (e)=>{
     actOnReport(t.dataset.slug, 'request_changes', note);
   }
   else if(action==='view-report-pdf'){ viewReportPdf(t.dataset.slug); }
+  else if(action==='sync-monday-report'){ syncReportToMonday(t.dataset.slug, t.closest('button')); }
   else if(action==='open-mine'){ openMySubmissions(); }
   else if(action==='close-mine-modal'){
     document.getElementById('mineModal').classList.remove('show');
@@ -1559,7 +1560,7 @@ function renderReviewList(list, filter){
       <div class="proj-actions">
         <button class="icon-btn" data-action="view-report-pdf" data-slug="${rec.slug}">View PDF</button>
         ${rec.status !== 'approved' ? `<button class="icon-btn" data-action="approve-report" data-slug="${rec.slug}">Approve</button>
-        <button class="icon-btn" data-action="request-changes-report" data-slug="${rec.slug}">Request changes</button>` : ''}
+        <button class="icon-btn" data-action="request-changes-report" data-slug="${rec.slug}">Request changes</button>` : `<button class="icon-btn" data-action="sync-monday-report" data-slug="${rec.slug}">Sync to Monday</button>`}
       </div>
     </div>`;
   }).join('');
@@ -1576,10 +1577,39 @@ async function actOnReport(slug, action, note){
     });
     const j = await res.json().catch(()=>({}));
     if(!res.ok) throw new Error(j.error||'Update failed');
-    showToast(action==='approve' ? 'Approved' : 'Sent back for changes');
+    if(action==='approve'){
+      const s = j.sync;
+      if(s && s.ok) showToast('Approved — sent to Monday' + (s.dateUpdated ? ' + date filled in' : ''));
+      else if(s && !s.ok) showToast('Approved — Monday sync skipped (' + s.reason + ')');
+      else showToast('Approved');
+    } else {
+      showToast('Sent back for changes');
+    }
     openReviewQueue();
   }catch(err){
     alert('Could not update that report: '+(err.message||err));
+  }
+}
+
+async function syncReportToMonday(slug, btnEl){
+  const key = await getReviewKey();
+  if(!key) return;
+  if(btnEl){ btnEl.disabled = true; btnEl.textContent = 'Syncing…'; }
+  try{
+    const res = await fetch('/.netlify/functions/review', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','X-Review-Key':key},
+      body: JSON.stringify({slug, action:'sync_monday'})
+    });
+    const j = await res.json().catch(()=>({}));
+    if(!res.ok) throw new Error(j.error||'Sync failed');
+    const s = j.sync;
+    if(s && s.ok) showToast('Synced to Monday: ' + s.propertyName + (s.dateUpdated ? ' (date filled in)' : s.dateNote ? ' ('+s.dateNote+')' : ''));
+    else showToast('Could not sync: ' + (s ? s.reason : 'unknown error'));
+  }catch(err){
+    alert('Could not sync to Monday: '+(err.message||err));
+  }finally{
+    if(btnEl){ btnEl.disabled = false; btnEl.textContent = 'Sync to Monday'; }
   }
 }
 
