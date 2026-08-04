@@ -853,6 +853,8 @@ document.addEventListener('click', async (e)=>{
   }
   else if(action==='view-report-pdf'){ viewReportPdf(t.dataset.slug); }
   else if(action==='sync-monday-report'){ syncReportToMonday(t.dataset.slug, t.closest('button')); }
+  else if(action==='delete-review-report'){ deleteReviewReport(t.dataset.slug, t.dataset.project); }
+  else if(action==='delete-mine-report'){ deleteMineReport(t.dataset.slug, t.dataset.project); }
   else if(action==='open-mine'){ openMySubmissions(); }
   else if(action==='close-mine-modal'){
     document.getElementById('mineModal').classList.remove('show');
@@ -1561,6 +1563,7 @@ function renderReviewList(list, filter){
         <button class="icon-btn" data-action="view-report-pdf" data-slug="${rec.slug}">View PDF</button>
         ${rec.status !== 'approved' ? `<button class="icon-btn" data-action="approve-report" data-slug="${rec.slug}">Approve</button>
         <button class="icon-btn" data-action="request-changes-report" data-slug="${rec.slug}">Request changes</button>` : `<button class="icon-btn" data-action="sync-monday-report" data-slug="${rec.slug}">Sync to Monday</button>`}
+        <button class="icon-btn" style="color:#A8461F;" data-action="delete-review-report" data-slug="${rec.slug}" data-project="${(rec.meta && rec.meta.project || '').replace(/"/g,'&quot;')}">Delete</button>
       </div>
     </div>`;
   }).join('');
@@ -1610,6 +1613,28 @@ async function syncReportToMonday(slug, btnEl){
     alert('Could not sync to Monday: '+(err.message||err));
   }finally{
     if(btnEl){ btnEl.disabled = false; btnEl.textContent = 'Sync to Monday'; }
+  }
+}
+
+async function deleteReviewReport(slug, project){
+  if(!confirm(`Delete this report for good?
+
+${project||slug}
+
+This removes it from the Review queue and My submissions, and deletes the PDF (and any Monday.com upload stays as-is). This can't be undone.`)) return;
+  const key = await getReviewKey();
+  if(!key) return;
+  try{
+    const res = await fetch('/.netlify/functions/review', {
+      method:'POST', headers:{'Content-Type':'application/json','X-Review-Key':key},
+      body: JSON.stringify({slug, action:'delete'})
+    });
+    const j = await res.json().catch(()=>({}));
+    if(!res.ok) throw new Error(j.error || 'Delete failed');
+    showToast('Deleted');
+    openReviewQueue();
+  }catch(err){
+    alert('Could not delete that report: '+(err.message||err));
   }
 }
 
@@ -1973,6 +1998,7 @@ function renderMineList(list){
         ${canDownload
           ? `<button class="icon-btn" data-action="download-mine-pdf" data-slug="${rec.slug}">Download approved PDF</button>`
           : `<span class="empty-hint" style="padding:0;">${rec.status==='changes_requested' ? 'Fix and resubmit from this device.' : 'Waiting on review — check back later.'}</span>`}
+        <button class="icon-btn" style="color:#A8461F;" data-action="delete-mine-report" data-slug="${rec.slug}" data-project="${(rec.meta && rec.meta.project || '').replace(/"/g,'&quot;')}">Delete</button>
       </div>
     </div>`;
   }).join('');
@@ -2002,6 +2028,28 @@ async function downloadMyPdf(slug){
     showToast('Downloaded — ready to attach to an email');
   }catch(err){
     alert('Could not download that PDF: '+(err.message||err));
+  }
+}
+
+async function deleteMineReport(slug, project){
+  if(!confirm(`Delete this report for good?
+
+${project||slug}
+
+This removes it from My submissions and the Review queue, and deletes the PDF. This can't be undone.`)) return;
+  const key = await getSubmitKey();
+  if(!key) return;
+  try{
+    const res = await fetch('/.netlify/functions/my-reports', {
+      method:'POST', headers:{'Content-Type':'application/json','X-Submit-Key':key},
+      body: JSON.stringify({slug, action:'delete'})
+    });
+    const j = await res.json().catch(()=>({}));
+    if(!res.ok) throw new Error(j.error || 'Delete failed');
+    showToast('Deleted');
+    openMySubmissions();
+  }catch(err){
+    alert('Could not delete that report: '+(err.message||err));
   }
 }
 
