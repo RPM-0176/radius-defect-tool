@@ -147,6 +147,15 @@ exports.handler = async (event) => {
     if (!res.ok) throw new Error('Failed to write registry (' + res.status + ')');
   }
 
+  async function ghDeleteFile(path, sha, message) {
+    const res = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/contents/${path}`, {
+      method: 'DELETE',
+      headers: ghHeaders(),
+      body: JSON.stringify({ message, sha, branch })
+    });
+    if (!res.ok && res.status !== 404) throw new Error('GitHub DELETE ' + path + ' failed (' + res.status + ')');
+  }
+
   // Once a report is approved, find the matching property on Monday.com,
   // attach the actual PDF to the existing "Files & Reports" column, and — for
   // a recognised stage inspection — fill in the matching "Actual X Date"
@@ -255,7 +264,7 @@ exports.handler = async (event) => {
     }
     const { slug, action, note } = payload;
     if (!slug || !action) return { statusCode: 400, body: JSON.stringify({ error: 'Missing slug or action' }) };
-    if (action !== 'approve' && action !== 'request_changes' && action !== 'sync_monday') {
+    if (action !== 'approve' && action !== 'request_changes' && action !== 'sync_monday' && action !== 'delete') {
       return { statusCode: 400, body: JSON.stringify({ error: 'Unknown action' }) };
     }
 
@@ -270,6 +279,28 @@ exports.handler = async (event) => {
         if (entry.status !== 'approved') return { statusCode: 400, body: JSON.stringify({ error: 'Only approved reports can be synced to Monday.' }) };
         const syncResult = await pushApprovedReportToMonday(entry);
         return { statusCode: 200, body: JSON.stringify({ ok: true, sync: syncResult }) };
+      } catch (err) {
+        return { statusCode: 500, body: JSON.stringify({ error: String(err && err.message ? err.message : err) }) };
+      }
+    }
+
+    // Delete a report entirely — from the registry and its stored PDF.
+    // Managers can delete any report, any status, since this is a cleanup
+    // action, not a review decision.
+    if (action === 'delete') {
+      try {
+        const { list, sha } = await getRegistry();
+        const idx = list.findIndex(r => r.slug === slug);
+        if (idx === -1) return { statusCode: 404, body: JSON.stringify({ error: 'Report not found in registry' }) };
+        const entry = list[idx];
+        const pdfPath = entry.pdfPath || `reports/${slug}/defect-report.pdf`;
+        const pdfR = await ghGetRaw(pdfPath);
+        if (pdfR.exists) {
+          await ghDeleteFile(pdfPath, pdfR.sha, `Delete report file: ${slug}`);
+        }
+        list.splice(idx, 1);
+        await putRegistry(list, sha);
+        return { statusCode: 200, body: JSON.stringify({ ok: true }) };
       } catch (err) {
         return { statusCode: 500, body: JSON.stringify({ error: String(err && err.message ? err.message : err) }) };
       }
