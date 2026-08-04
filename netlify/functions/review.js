@@ -43,6 +43,33 @@ function normalizeAddress(str) {
   s = s.replace(/\s+/g, ' ').trim();
   return s;
 }
+
+// Standard edit-distance calculation, so a small typo doesn't break matching
+// (e.g. "seperation" vs "separation" is a single substitution, distance 1).
+function levenshtein(a, b) {
+  const m = a.length, n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = a[i-1] === b[j-1] ? dp[i-1][j-1]
+        : 1 + Math.min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1]);
+    }
+  }
+  return dp[m][n];
+}
+
+// Allows a small typo per word — scaled to the word's length so short words
+// (like "st" or "rd") still require an exact match, avoiding false positives.
+function tokensMatch(a, b) {
+  if (a === b) return true;
+  const maxLen = Math.max(a.length, b.length);
+  const tolerance = maxLen >= 8 ? 2 : maxLen >= 4 ? 1 : 0;
+  return levenshtein(a, b) <= tolerance;
+}
 function addressesMatch(a, b) {
   const na = normalizeAddress(a), nb = normalizeAddress(b);
   if (!na || !nb) return false;
@@ -50,7 +77,7 @@ function addressesMatch(a, b) {
   const tokensB = nb.split(' ').filter(Boolean);
   if (!tokensA.length || !tokensB.length) return false;
   const [shorter, longer] = tokensA.length <= tokensB.length ? [tokensA, tokensB] : [tokensB, tokensA];
-  return shorter.every(t => longer.includes(t));
+  return shorter.every(t => longer.some(t2 => tokensMatch(t, t2)));
 }
 
 exports.handler = async (event) => {
@@ -130,8 +157,8 @@ exports.handler = async (event) => {
   async function pushApprovedReportToMonday(entry) {
     const mondayToken = process.env.MONDAY_API_TOKEN;
     const mondayBoardId = process.env.MONDAY_BOARD_ID || '5025662448';
-    if (!mondayToken) { console.log('[review] MONDAY_API_TOKEN not set — skipping Monday sync'); return; }
-    if (!entry.meta || !entry.meta.project) { console.log('[review] No project name on this report — skipping Monday sync'); return; }
+    if (!mondayToken) { const msg = 'MONDAY_API_TOKEN not set — skipping Monday sync'; console.log('[review] ' + msg); return { ok: false, reason: msg }; }
+    if (!entry.meta || !entry.meta.project) { const msg = 'No project name on this report'; console.log('[review] ' + msg); return { ok: false, reason: msg }; }
 
     const itemQuery = `query { boards(ids: ${mondayBoardId}) { items_page(limit: 100) { items { id name } } } }`;
     const itemRes = await fetch(MONDAY_API, {
@@ -142,11 +169,15 @@ exports.handler = async (event) => {
     if (itemJson.errors) throw new Error('Monday item lookup failed: ' + JSON.stringify(itemJson.errors));
     const items = itemJson.data.boards[0].items_page.items;
     const match = items.find(it => addressesMatch(it.name, entry.meta.project));
-    if (!match) { console.log(`[review] No Monday.com property matched "${entry.meta.project}" — skipping sync`); return; }
+    if (!match) {
+      const msg = `No Monday.com property matched "${entry.meta.project}"`;
+      console.log('[review] ' + msg + ' — skipping sync');
+      return { ok: false, reason: msg };
+    }
 
     // Fetch the actual approved PDF to attach
     const pdfR = await ghGetRaw(entry.pdfPath);
-    if (!pdfR.exists) { console.log('[review] Could not find the PDF file to attach — skipping file upload'); return; }
+    if (!pdfR.exists) { const msg = 'Could not find the PDF file to attach'; console.log('[review] ' + msg); return { ok: false, reason: msg }; }
     const pdfBuffer = Buffer.from(pdfR.content, 'base64');
 
     // Upload it into the existing "Files & Reports" column
@@ -160,6 +191,7 @@ exports.handler = async (event) => {
     console.log(`[review] Uploaded ${entry.slug}.pdf to Monday item "${match.name}"`);
 
     // For a recognised stage, fill in the Actual Date column — only if empty
+    let dateUpdated = false, dateNote = null;
     const actualCol = entry.meta.stage && STAGE_ACTUAL_DATE_COLUMNS[entry.meta.stage];
     if (actualCol && entry.meta.date) {
       const checkQuery = `query { items(ids: ${match.id}) { column_values(ids: ["${actualCol}"]) { text } } }`;
@@ -179,10 +211,13 @@ exports.handler = async (event) => {
         const setJson = await setRes.json();
         if (setJson.errors) throw new Error('Monday date update failed: ' + JSON.stringify(setJson.errors));
         console.log(`[review] Filled in ${actualCol} = ${entry.meta.date} on Monday item "${match.name}"`);
+        dateUpdated = true;
       } else {
         console.log(`[review] ${actualCol} already has a value ("${currentValue}") — left untouched`);
+        dateNote = `date already set to "${currentValue}", left untouched`;
       }
     }
+    return { ok: true, propertyName: match.name, dateUpdated, dateNote };
   }
 
   // ---- GET: view a specific report's PDF, one chunk at a time (proxied through GitHub's API) ----
@@ -212,7 +247,7 @@ exports.handler = async (event) => {
     }
   }
 
-  // ---- POST: approve / request changes ----
+  // ---- POST: approve / request changes / retry the Monday sync manually ----
   if (event.httpMethod === 'POST') {
     let payload;
     try { payload = JSON.parse(event.body); } catch (e) {
@@ -220,9 +255,26 @@ exports.handler = async (event) => {
     }
     const { slug, action, note } = payload;
     if (!slug || !action) return { statusCode: 400, body: JSON.stringify({ error: 'Missing slug or action' }) };
-    if (action !== 'approve' && action !== 'request_changes') {
+    if (action !== 'approve' && action !== 'request_changes' && action !== 'sync_monday') {
       return { statusCode: 400, body: JSON.stringify({ error: 'Unknown action' }) };
     }
+
+    // Manually retry the Monday sync on an already-approved report — for
+    // when the first attempt didn't match (e.g. a typo) and you've now fixed
+    // it on one side or the other, without needing to re-approve.
+    if (action === 'sync_monday') {
+      try {
+        const { list } = await getRegistry();
+        const entry = list.find(r => r.slug === slug);
+        if (!entry) return { statusCode: 404, body: JSON.stringify({ error: 'Report not found in registry' }) };
+        if (entry.status !== 'approved') return { statusCode: 400, body: JSON.stringify({ error: 'Only approved reports can be synced to Monday.' }) };
+        const syncResult = await pushApprovedReportToMonday(entry);
+        return { statusCode: 200, body: JSON.stringify({ ok: true, sync: syncResult }) };
+      } catch (err) {
+        return { statusCode: 500, body: JSON.stringify({ error: String(err && err.message ? err.message : err) }) };
+      }
+    }
+
     try {
       const { list, sha } = await getRegistry();
       const idx = list.findIndex(r => r.slug === slug);
@@ -232,16 +284,18 @@ exports.handler = async (event) => {
       list[idx].reviewNote = note || '';
       await putRegistry(list, sha);
 
+      let syncResult = null;
       if (action === 'approve') {
         try {
-          await pushApprovedReportToMonday(list[idx]);
+          syncResult = await pushApprovedReportToMonday(list[idx]);
         } catch (mondayErr) {
           // Best-effort — the approval itself has already succeeded and saved.
           console.error('[review] Monday.com sync failed (non-fatal, approval still succeeded):', mondayErr.message);
+          syncResult = { ok: false, reason: mondayErr.message };
         }
       }
 
-      return { statusCode: 200, body: JSON.stringify({ ok: true }) };
+      return { statusCode: 200, body: JSON.stringify({ ok: true, sync: syncResult }) };
     } catch (err) {
       return { statusCode: 500, body: JSON.stringify({ error: String(err && err.message ? err.message : err) }) };
     }
@@ -249,4 +303,3 @@ exports.handler = async (event) => {
 
   return { statusCode: 405, body: JSON.stringify({ error: 'Method not allowed' }) };
 };
-
