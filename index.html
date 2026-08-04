@@ -1874,13 +1874,22 @@ async function approveInvestorReport(slug, btnEl){
 }
 
 async function viewInvestorReport(slug, shouldDownload){
-  const key = await getReviewKey();
-  if(!key) return;
+  // Same fix as viewReportPdf: open the tab as the first synchronous action,
+  // before any await, so the browser reliably ties it to the click.
   let newTab = null;
   if(!shouldDownload){
     newTab = window.open('', '_blank');
     if(!newTab){ alert('Your browser blocked this from opening a new tab. Allow popups for this site and try again.'); return; }
     newTab.document.write('<html><body style="font-family:sans-serif;color:#666;padding:20px;">Loading…</body></html>');
+  }
+  const key = await getReviewKey();
+  if(!key){
+    if(newTab){
+      newTab.document.open();
+      newTab.document.write('<html><body style="font-family:sans-serif;padding:20px;color:#a8461f;">Paste your manager review key into the box above first.</body></html>');
+      newTab.document.close();
+    }
+    return;
   }
   try{
     let chunkIndex = 0, totalChunks = 1, assembled = '';
@@ -1898,10 +1907,9 @@ async function viewInvestorReport(slug, shouldDownload){
     if(shouldDownload){
       doc.save(`${data.investor.toLowerCase().replace(/[^a-z0-9]+/g,'-')}-${data.month}-investor-report.pdf`);
     } else {
-      const pdfBase64 = doc.output('datauristring').split(',')[1];
-      const dataUri = 'data:application/pdf;base64,' + pdfBase64;
+      const blobUrl = URL.createObjectURL(doc.output('blob'));
       newTab.document.open();
-      newTab.document.write(`<html><head><title>${data.investor} — ${data.monthLabel}</title></head><body style="margin:0"><embed src="${dataUri}" type="application/pdf" width="100%" height="100%"></body></html>`);
+      newTab.document.write(`<html><head><title>${data.investor} — ${data.monthLabel}</title></head><body style="margin:0"><embed src="${blobUrl}" type="application/pdf" width="100%" height="100%"></body></html>`);
       newTab.document.close();
     }
   }catch(err){
@@ -1916,17 +1924,25 @@ async function viewInvestorReport(slug, shouldDownload){
 }
 
 async function viewReportPdf(slug){
-  const key = await getReviewKey();
-  if(!key) return;
-  // Open the tab immediately, synchronously with the tap — some browsers
-  // (Safari on iPad especially) silently block window.open() if there's
-  // any delay first, e.g. waiting on these fetch calls.
+  // window.open() MUST be the very first thing that happens, with nothing
+  // awaited before it — the moment an await runs first, the browser no
+  // longer considers this a direct result of the click, and silently blocks
+  // the popup (this was a real bug: the comment below used to be aspirational,
+  // not actually true, because getReviewKey() was awaited before this ran).
   const newTab = window.open('', '_blank');
   if(!newTab){
     alert('Your browser blocked this from opening a new tab. Check for a popup-blocked notice near your address bar and allow it, then try again.');
     return;
   }
   newTab.document.write('<html><head><title>Loading report…</title></head><body style="margin:0;font-family:sans-serif;color:#666;padding:20px;">Loading…</body></html>');
+
+  const key = await getReviewKey();
+  if(!key){
+    newTab.document.open();
+    newTab.document.write('<html><body style="font-family:sans-serif;padding:20px;color:#a8461f;">Paste your manager review key into the box above first.</body></html>');
+    newTab.document.close();
+    return;
+  }
   try{
     let chunkIndex = 0, totalChunks = 1, assembled = '';
     while(chunkIndex < totalChunks){
@@ -1937,14 +1953,16 @@ async function viewReportPdf(slug){
       totalChunks = j.totalChunks;
       chunkIndex++;
     }
-    // A blob: URL only works inside the window/tab that created it, and
-    // browsers block navigating a new tab straight to a data: URL as a
-    // security measure — so instead we write a small page into the already-
-    // open tab containing an <embed> that points at the data URI. That's
-    // just loading a resource, not a top-level navigation, so it isn't blocked.
-    const dataUri = 'data:application/pdf;base64,' + assembled;
+    // A blob: URL is the more robust choice for embedding a large PDF —
+    // more reliably supported across browsers than a data: URI, and (tested
+    // directly) works fine across tabs despite older assumptions otherwise.
+    const byteChars = atob(assembled);
+    const byteNumbers = new Array(byteChars.length);
+    for(let i=0;i<byteChars.length;i++) byteNumbers[i] = byteChars.charCodeAt(i);
+    const blob = new Blob([new Uint8Array(byteNumbers)], {type:'application/pdf'});
+    const blobUrl = URL.createObjectURL(blob);
     newTab.document.open();
-    newTab.document.write(`<html><head><title>${slug}</title></head><body style="margin:0"><embed src="${dataUri}" type="application/pdf" width="100%" height="100%"></body></html>`);
+    newTab.document.write(`<html><head><title>${slug}</title></head><body style="margin:0"><embed src="${blobUrl}" type="application/pdf" width="100%" height="100%"></body></html>`);
     newTab.document.close();
   }catch(err){
     try{
