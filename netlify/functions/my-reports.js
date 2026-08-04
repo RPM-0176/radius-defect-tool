@@ -49,6 +49,23 @@ exports.handler = async (event) => {
     return { exists: true, sha: j.sha, content: '' };
   }
 
+  async function ghDeleteFile(path, sha, message) {
+    const res = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/contents/${path}`, {
+      method: 'DELETE',
+      headers: ghHeaders(),
+      body: JSON.stringify({ message, sha, branch })
+    });
+    if (!res.ok && res.status !== 404) throw new Error('GitHub DELETE ' + path + ' failed (' + res.status + ')');
+  }
+
+  async function ghPutContent(path, contentBase64, message, sha) {
+    const res = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/contents/${path}`, {
+      method: 'PUT', headers: ghHeaders(),
+      body: JSON.stringify({ message, content: contentBase64, branch, ...(sha ? { sha } : {}) })
+    });
+    if (!res.ok) throw new Error('GitHub PUT ' + path + ' failed (' + res.status + ')');
+  }
+
   const KEYS_PATH = 'reports/team-keys.json';
   const REG_PATH = 'reports/registry.json';
   const DOWNLOAD_CHUNK_SIZE = 900000;
@@ -98,6 +115,40 @@ exports.handler = async (event) => {
       const totalChunks = Math.max(Math.ceil(fullBase64.length / DOWNLOAD_CHUNK_SIZE), 1);
       const chunkData = fullBase64.slice(chunkIndex * DOWNLOAD_CHUNK_SIZE, (chunkIndex + 1) * DOWNLOAD_CHUNK_SIZE);
       return { statusCode: 200, body: JSON.stringify({ ok: true, chunkData, chunkIndex, totalChunks }) };
+    } catch (err) {
+      return { statusCode: 500, body: JSON.stringify({ error: String(err && err.message ? err.message : err) }) };
+    }
+  }
+
+  // ---- POST: delete one of MY OWN submissions (any status) ----
+  if (event.httpMethod === 'POST') {
+    let payload;
+    try { payload = JSON.parse(event.body); } catch (e) {
+      return { statusCode: 400, body: JSON.stringify({ error: 'Invalid JSON body' }) };
+    }
+    const { slug, action } = payload;
+    if (!slug || action !== 'delete') return { statusCode: 400, body: JSON.stringify({ error: 'Missing slug, or unsupported action.' }) };
+    const safeSlug = String(slug).replace(/[^a-zA-Z0-9_\-]/g, '-');
+    try {
+      const regR = await ghGetRaw(REG_PATH);
+      if (!regR.exists) return { statusCode: 404, body: JSON.stringify({ error: 'No records found yet.' }) };
+      const list = JSON.parse(Buffer.from(regR.content, 'base64').toString('utf-8'));
+      const idx = list.findIndex(r => r.slug === safeSlug);
+      if (idx === -1) return { statusCode: 404, body: JSON.stringify({ error: 'Report not found.' }) };
+      if (list[idx].submittedBy !== auth.name) {
+        return { statusCode: 403, body: JSON.stringify({ error: 'That report was not submitted with your key \u2014 you can only delete your own.' }) };
+      }
+
+      const pdfPath = `reports/${safeSlug}/defect-report.pdf`;
+      const pdfR = await ghGetRaw(pdfPath);
+      if (pdfR.exists) {
+        await ghDeleteFile(pdfPath, pdfR.sha, `Delete report file: ${safeSlug}`);
+      }
+
+      list.splice(idx, 1);
+      await ghPutContent(REG_PATH, Buffer.from(JSON.stringify(list, null, 2), 'utf-8').toString('base64'), `Delete report from registry: ${safeSlug}`, regR.sha);
+
+      return { statusCode: 200, body: JSON.stringify({ ok: true }) };
     } catch (err) {
       return { statusCode: 500, body: JSON.stringify({ error: String(err && err.message ? err.message : err) }) };
     }
