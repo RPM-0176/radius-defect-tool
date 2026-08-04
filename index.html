@@ -359,18 +359,6 @@ textarea.notes:focus{outline:2px solid var(--steel-2);outline-offset:-1px;}
     </div>
     <div id="reviewList"></div>
 
-    <div style="margin-top:22px;border-top:1px solid var(--line);padding-top:14px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-        <h4 style="margin:0;font-size:14px;">Site visits</h4>
-        <select id="siteVisitReviewFilter" style="padding:6px 8px;border:1px solid var(--line);border-radius:6px;font-size:12px;background:#fff;">
-          <option value="pending" selected>Pending</option>
-          <option value="approved">Approved</option>
-          <option value="all">All</option>
-        </select>
-      </div>
-      <div id="siteVisitReviewList"></div>
-    </div>
-
     <div style="margin-top:14px;text-align:right;">
       <button class="btn btn-sm" data-action="close-review-modal">Close</button>
     </div>
@@ -421,13 +409,6 @@ textarea.notes:focus{outline:2px solid var(--steel-2);outline-offset:-1px;}
       <button class="btn btn-sm" data-action="close-site-visit-modal">Cancel</button>
       <button class="btn btn-dark" data-action="submit-site-visit">Save site visit</button>
     </div>
-    <div style="margin-top:20px;border-top:1px solid var(--line);padding-top:14px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;">
-        <h4 style="margin:0;font-size:14px;">Recent visits</h4>
-        <button class="btn btn-sm" data-action="refresh-site-visits">Refresh</button>
-      </div>
-      <div id="recentSiteVisitsList" style="margin-top:10px;"></div>
-    </div>
   </div>
 </div>
 
@@ -453,6 +434,7 @@ function activeChecklist(){
   return (s || STAGES[0]).data;
 }
 function stageLabel(key){
+  if(key === 'site_visit') return 'Site Visit';
   const s = STAGES.find(x=>x.key === key);
   return s ? s.label : 'Practical Completion';
 }
@@ -889,10 +871,6 @@ document.addEventListener('click', async (e)=>{
     siteVisitState.photos.splice(parseInt(t.dataset.idx,10), 1);
     renderSiteVisitPhotos();
   }
-  else if(action==='refresh-site-visits'){ loadRecentSiteVisits(); }
-  else if(action==='edit-site-visit'){ openSiteVisitForEdit(t.dataset.id); }
-  else if(action==='share-site-visit'){ shareSiteVisit(t.dataset.id); }
-  else if(action==='approve-site-visit-review'){ approveSiteVisitReview(t.dataset.id, t.closest('button')); }
   else if(action==='open-investor-reports'){ openInvestorReports(); }
   else if(action==='close-investor-reports-modal'){
     document.getElementById('investorReportsModal').classList.remove('show');
@@ -945,13 +923,12 @@ document.addEventListener('change', (e)=>{
   if(e.target.id==='submitKey'){ setSetting({submitKey: e.target.value}); }
   if(e.target.id==='reviewKey'){ setSetting({reviewKey: e.target.value}); }
   if(e.target.id==='reviewFilter'){ applyReviewFilters(); }
-  if(e.target.id==='siteVisitReviewFilter'){ applySiteVisitReviewFilters(); }
   if(e.target.id==='m_stage'){
     const newStage = e.target.value;
     if(newStage === state.meta.stage) return;
     const hasProgress = Object.values(state.items).some(it=>it.status);
     if(hasProgress){
-      if(!confirm('Switching stage clears the checklist items you\'ve ticked so far (project details are kept). Continue?')){
+      if(!confirm("Switching stage clears the checklist items you've ticked so far (project details are kept). Continue?")){
         e.target.value = state.meta.stage;
         return;
       }
@@ -1424,8 +1401,6 @@ async function submitFileToCentral(slug, filename, contentBase64, meta, kind, su
 let siteVisitState = { project:'', date:'', loggedBy:'', attendees:'', notes:'', photos:[] };
 
 function openSiteVisitModal(){
-  editingVisitId = null;
-  existingVisitPhotoRefs = [];
   siteVisitState = {
     project: state.meta.project || '',
     date: new Date().toISOString().slice(0,10),
@@ -1436,87 +1411,12 @@ function openSiteVisitModal(){
   document.getElementById('sv_loggedby').value = '';
   document.getElementById('sv_attendees').value = '';
   document.getElementById('sv_notes').value = '';
-  document.querySelector('[data-action="submit-site-visit"]').textContent = 'Save site visit';
   renderSiteVisitPhotos();
   document.getElementById('siteVisitModal').classList.add('show');
-  loadRecentSiteVisits();
-}
-
-function openSiteVisitForEdit(id){
-  const v = lastLoadedSiteVisits.find(x=>x.id===id);
-  if(!v) return;
-  editingVisitId = id;
-  existingVisitPhotoRefs = v.photos || [];
-  siteVisitState = { project:v.project, date:v.date, loggedBy:v.loggedBy||'', attendees:v.attendees||'', notes:v.notes||'', photos:[] };
-  document.getElementById('sv_project').value = v.project || '';
-  document.getElementById('sv_date').value = v.date || '';
-  document.getElementById('sv_loggedby').value = v.loggedBy || '';
-  document.getElementById('sv_attendees').value = v.attendees || '';
-  document.getElementById('sv_notes').value = v.notes || '';
-  document.querySelector('[data-action="submit-site-visit"]').textContent = 'Update site visit';
-  renderSiteVisitPhotos();
-  showToast('Editing existing visit — saving will update it, not create a new one');
-}
-
-async function shareSiteVisit(id){
-  const v = lastLoadedSiteVisits.find(x=>x.id===id);
-  if(!v) return;
-  const d = new Date(v.date).toLocaleDateString('en-AU');
-  const text = `Site visit — ${v.project}
-${d}${v.loggedBy?'\nLogged by: '+v.loggedBy:''}${v.attendees?'\nAttendees: '+v.attendees:''}
-
-${v.notes||''}`;
-  if(navigator.share){
-    try{ await navigator.share({title:'Site visit — '+v.project, text}); }
-    catch(err){ if(err.name !== 'AbortError') alert('Could not share: '+(err.message||err)); }
-  } else {
-    window.location.href = `mailto:?subject=${encodeURIComponent('Site visit — '+v.project)}&body=${encodeURIComponent(text)}`;
-  }
-}
-
-async function loadRecentSiteVisits(){
-  const key = await getSubmitKey();
-  const listEl = document.getElementById('recentSiteVisitsList');
-  if(!key){ listEl.innerHTML = '<div class="empty-hint">Paste your personal key above to see recent visits.</div>'; return; }
-  listEl.innerHTML = '<div class="empty-hint">Loading…</div>';
-  try{
-    const res = await fetch('/.netlify/functions/site-visits', { headers:{'X-Submit-Key':key} });
-    const j = await res.json();
-    if(!res.ok) throw new Error(j.error || ('Failed to load ('+res.status+')'));
-    renderRecentSiteVisits(j.visits || []);
-  }catch(err){
-    listEl.innerHTML = `<div class="empty-hint">Could not load — ${(err.message||err)}</div>`;
-  }
-}
-
-let editingVisitId = null;
-let existingVisitPhotoRefs = [];
-let lastLoadedSiteVisits = [];
-
-function renderRecentSiteVisits(visits){
-  lastLoadedSiteVisits = visits;
-  const listEl = document.getElementById('recentSiteVisitsList');
-  if(!visits.length){ listEl.innerHTML = '<div class="empty-hint">No site visits logged yet.</div>'; return; }
-  listEl.innerHTML = visits.slice(0,15).map(v=>{
-    const d = new Date(v.date);
-    return `<div class="proj-row">
-      <div style="cursor:pointer;" data-action="edit-site-visit" data-id="${v.id}">
-        <div class="proj-name">${v.project}</div>
-        <div class="proj-sub">${d.toLocaleDateString('en-AU')} · ${v.loggedBy||'—'}${v.photos&&v.photos.length?' · '+v.photos.length+' photo'+(v.photos.length===1?'':'s'):''}</div>
-        ${v.notes ? `<div class="empty-hint" style="padding:2px 0 0;">${v.notes.length>120?v.notes.slice(0,120)+'…':v.notes}</div>` : ''}
-      </div>
-      <div class="proj-actions">
-        <button class="icon-btn" data-action="share-site-visit" data-id="${v.id}">Send</button>
-      </div>
-    </div>`;
-  }).join('');
 }
 
 function renderSiteVisitPhotos(){
   const row = document.getElementById('siteVisitPhotoRow');
-  const existingNote = existingVisitPhotoRefs.length
-    ? `<div class="empty-hint" style="width:100%;padding:2px 0 4px;">Already attached: ${existingVisitPhotoRefs.join(', ')} (adding new photos below keeps these too)</div>`
-    : '';
   const thumbs = siteVisitState.photos.map((p,i)=>`
     <div class="thumb">
       <img src="${p.dataUrl}" alt="site visit photo">
@@ -1524,7 +1424,6 @@ function renderSiteVisitPhotos(){
       <button class="rm" data-action="remove-site-visit-photo" data-idx="${i}">&times;</button>
     </div>`).join('');
   row.innerHTML = `
-    ${existingNote}
     <label class="photo-btn">+ Photo
       <input type="file" accept="image/*" capture="environment" multiple data-action="add-site-visit-photo">
     </label>
@@ -1533,6 +1432,7 @@ function renderSiteVisitPhotos(){
 }
 
 async function submitSiteVisit(){
+  if(!window.jspdf){ alert('This needs a working internet connection to build the report. Try again once you have signal.'); return; }
   const key = await getSubmitKey();
   if(!key) return;
   const project = document.getElementById('sv_project').value.trim();
@@ -1542,28 +1442,24 @@ async function submitSiteVisit(){
   const attendees = document.getElementById('sv_attendees').value.trim();
   const notes = document.getElementById('sv_notes').value.trim();
 
-  const visitId = editingVisitId || (slugify(project, date, 'visit') + '-' + Math.random().toString(36).slice(2,6));
+  const slug = slugify(project, date, 'site_visit') + '-' + Math.random().toString(36).slice(2,6);
+  const meta = { project, stage:'site_visit', date, inspector: loggedBy, client:'', builder:'' };
+  const record = { project, date, loggedBy, attendees, notes, photos: siteVisitState.photos };
 
   const btn = document.querySelector('[data-action="submit-site-visit"]');
-  if(btn){ btn.disabled = true; btn.textContent = editingVisitId ? 'Updating…' : 'Saving…'; }
+  if(btn){ btn.disabled = true; btn.textContent = 'Sending…'; }
   try{
-    const newPhotoRefs = [];
-    for(let i=0; i<siteVisitState.photos.length; i++){
-      const p = siteVisitState.photos[i];
-      const filename = `photo-${existingVisitPhotoRefs.length + i}.jpg`;
-      await submitFileToCentral(visitId, filename, p.dataUrl.split(',')[1], null, 'site_visit_photo', null, key);
-      newPhotoRefs.push(filename);
-    }
-    const visitRecord = { project, date, loggedBy, attendees, notes, photos: existingVisitPhotoRefs.concat(newPhotoRefs), loggedAt: new Date().toISOString(), status:'pending', reviewedAt:null };
-    const visitBase64 = btoa(unescape(encodeURIComponent(JSON.stringify(visitRecord, null, 2))));
-    await submitFileToCentral(visitId, 'visit.json', visitBase64, null, 'site_visit', null, key);
+    showToast('Building report…');
+    const doc = buildSiteVisitPdf(record);
+    const pdfBase64 = doc.output('datauristring').split(',')[1];
+    await submitFileToCentral(slug, 'defect-report.pdf', pdfBase64, meta, 'pdf', {defects:0,crit:0,maj:0,min:0,na:0,photos:record.photos.length}, key);
 
     document.getElementById('siteVisitModal').classList.remove('show');
-    showToast((editingVisitId ? 'Site visit updated — ' : 'Site visit logged — ') + 'filed under ' + project);
+    showToast('Site visit sent — filed under ' + project + ', awaiting review');
   }catch(err){
-    alert('Could not save that site visit: '+(err.message||err));
+    alert("Could not save that site visit. It's not lost — try again once you have a better connection. " + (err.message||err));
   }finally{
-    if(btn){ btn.disabled = false; btn.textContent = editingVisitId ? 'Update site visit' : 'Save site visit'; }
+    if(btn){ btn.disabled = false; btn.textContent = 'Save site visit'; }
   }
 }
 
@@ -1571,7 +1467,7 @@ async function submitCentralRecord(){
   if(!window.jspdf){ alert('This needs a working internet connection to build and send the report. Try again once you have signal.'); return; }
   const setting = await getSetting();
   const key = (setting && setting.submitKey) ? setting.submitKey.trim() : '';
-  if(!key){ alert('Paste your personal access key into the "Your personal access key" box above the summary first — ask Jason if you haven\'t been issued one yet. You only need to do this once on this device.'); return; }
+  if(!key){ alert("Paste your personal access key into the 'Your personal access key' box above the summary first — ask Jason if you haven't been issued one yet. You only need to do this once on this device."); return; }
   if(!state.meta.project){ alert('Add a project name first so the central record can file this under the right job.'); return; }
   if(!state.slug){ state.slug = slugify(state.meta.project, state.meta.date, state.meta.stage); scheduleSave(); }
 
@@ -1606,7 +1502,7 @@ let lastReviewList = [];
 
 async function openReviewQueue(){
   const key = await getReviewKey();
-  if(!key){ alert('Paste the manager review key into the "Manager review key" box above first — ask Jason if you don\'t have it.'); return; }
+  if(!key){ alert("Paste the manager review key into the 'Manager review key' box above first — ask Jason if you don't have it."); return; }
   const listEl = document.getElementById('reviewList');
   listEl.innerHTML = '<div class="empty-hint">Loading…</div>';
   document.getElementById('reviewModal').classList.add('show');
@@ -1620,69 +1516,6 @@ async function openReviewQueue(){
     applyReviewFilters();
   }catch(err){
     listEl.innerHTML = `<div class="empty-hint">Could not load the review queue — ${ (err.message||err) }</div>`;
-  }
-  loadSiteVisitReviewList(key);
-}
-
-let lastSiteVisitReviewList = [];
-
-async function loadSiteVisitReviewList(key){
-  const listEl = document.getElementById('siteVisitReviewList');
-  listEl.innerHTML = '<div class="empty-hint">Loading…</div>';
-  document.getElementById('siteVisitReviewFilter').value = 'pending';
-  try{
-    const res = await fetch('/.netlify/functions/site-visits', { headers:{'X-Review-Key':key} });
-    const j = await res.json();
-    if(!res.ok) throw new Error(j.error || ('Failed to load ('+res.status+')'));
-    lastSiteVisitReviewList = j.visits || [];
-    applySiteVisitReviewFilters();
-  }catch(err){
-    listEl.innerHTML = `<div class="empty-hint">Could not load site visits — ${ (err.message||err) }</div>`;
-  }
-}
-
-function applySiteVisitReviewFilters(){
-  const filter = document.getElementById('siteVisitReviewFilter').value;
-  let list = lastSiteVisitReviewList;
-  if(filter === 'pending') list = list.filter(v => v.status !== 'approved');
-  else if(filter === 'approved') list = list.filter(v => v.status === 'approved');
-  renderSiteVisitReviewList(list);
-}
-
-function renderSiteVisitReviewList(list){
-  const listEl = document.getElementById('siteVisitReviewList');
-  if(!list.length){ listEl.innerHTML = '<div class="empty-hint">Nothing here.</div>'; return; }
-  listEl.innerHTML = list.map(v=>{
-    const d = new Date(v.date);
-    return `<div class="proj-row" style="align-items:flex-start;">
-      <div>
-        <div class="proj-name">${v.project} <span class="empty-hint" style="padding:0;">${v.status==='approved' ? '✅ Approved' : '⏳ Pending'}</span></div>
-        <div class="proj-sub">${d.toLocaleDateString('en-AU')} · logged by ${v.loggedBy||'—'}${v.attendees ? ' · attendees: '+v.attendees : ''}${v.photos&&v.photos.length ? ' · '+v.photos.length+' photo'+(v.photos.length===1?'':'s') : ''}</div>
-        ${v.notes ? `<div style="font-size:12.5px;color:#3a3a3a;margin-top:4px;white-space:pre-wrap;">${v.notes}</div>` : ''}
-      </div>
-      <div class="proj-actions">
-        ${v.status!=='approved' ? `<button class="icon-btn" data-action="approve-site-visit-review" data-id="${v.id}">Approve</button>` : ''}
-      </div>
-    </div>`;
-  }).join('');
-}
-
-async function approveSiteVisitReview(id, btnEl){
-  const key = await getReviewKey();
-  if(!key) return;
-  if(btnEl){ btnEl.disabled = true; btnEl.textContent = 'Approving…'; }
-  try{
-    const res = await fetch('/.netlify/functions/site-visits', {
-      method:'POST', headers:{'Content-Type':'application/json','X-Review-Key':key},
-      body: JSON.stringify({id, action:'approve'})
-    });
-    const j = await res.json().catch(()=>({}));
-    if(!res.ok) throw new Error(j.error || 'Approve failed');
-    showToast('Site visit approved');
-    loadSiteVisitReviewList(key);
-  }catch(err){
-    alert('Could not approve: '+(err.message||err));
-    if(btnEl){ btnEl.disabled = false; btnEl.textContent = 'Approve'; }
   }
 }
 
@@ -1748,6 +1581,77 @@ async function actOnReport(slug, action, note){
   }catch(err){
     alert('Could not update that report: '+(err.message||err));
   }
+}
+
+// Builds a branded, professional PDF for a single site visit — same logo
+// and styling as everything else in the tool. This is what actually flows
+// through the normal central-record / review / approve pipeline, exactly
+// like a defect report — a site visit is just a different kind of report,
+// not a separate system.
+function buildSiteVisitPdf(record){
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({unit:'mm', format:'a4'});
+  const W = doc.internal.pageSize.getWidth();
+  const H = doc.internal.pageSize.getHeight();
+  const margin = 18;
+
+  const logoW = 58, logoH = logoW * (197/485);
+  try{ doc.addImage(RADIUS_LOGO, 'PNG', (W-logoW)/2, 18, logoW, logoH, undefined, 'FAST'); }catch(err){}
+  let y = 18 + logoH + 10;
+  doc.setDrawColor(27,36,48); doc.setLineWidth(0.6);
+  doc.line(W/2-20, y, W/2+20, y); y += 9;
+  doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.setTextColor(27,36,48);
+  doc.text('Site Visit Report', W/2, y, {align:'center'}); y += 12;
+
+  doc.setFont('helvetica','bold'); doc.setFontSize(12); doc.setTextColor(20,20,20);
+  doc.text(pdfSafe(record.project), margin, y); y += 7;
+  doc.setDrawColor(217,211,196); doc.line(margin, y, W-margin, y); y += 8;
+
+  const rows = [
+    ['Date', new Date(record.date).toLocaleDateString('en-AU')],
+    ['Logged by', record.loggedBy || '—'],
+    ['Attendees', record.attendees || '—'],
+  ];
+  const colW = (W-margin*2)/2;
+  rows.forEach((r,i)=>{
+    const col = i%2, row = Math.floor(i/2);
+    const x = margin + col*colW, ry = y + row*11;
+    doc.setFont('helvetica','bold'); doc.setFontSize(7.5); doc.setTextColor(90,100,110);
+    doc.text(r[0].toUpperCase(), x, ry);
+    doc.setFont('helvetica','normal'); doc.setFontSize(10); doc.setTextColor(20,20,20);
+    doc.text(pdfSafe(r[1]), x, ry+5);
+  });
+  y += Math.ceil(rows.length/2)*11 + 8;
+
+  doc.setFont('helvetica','bold'); doc.setFontSize(10.5); doc.setTextColor(27,36,48);
+  doc.text('What happened', margin, y); y += 6;
+  doc.setFont('helvetica','normal'); doc.setFontSize(10); doc.setTextColor(40,40,40);
+  const noteLines = doc.splitTextToSize(pdfSafe(record.notes||'(no notes recorded)'), W-margin*2);
+  doc.text(noteLines, margin, y); y += noteLines.length*5 + 10;
+
+  if(record.photos && record.photos.length){
+    doc.setFont('helvetica','bold'); doc.setFontSize(10.5); doc.setTextColor(27,36,48);
+    doc.text('Photos', margin, y); y += 7;
+    const perRow=3, gap=4, imgW=(W-2*margin-gap*(perRow-1))/perRow, imgH=40;
+    record.photos.forEach((p,i)=>{
+      const col = i%perRow;
+      if(col===0 && i>0) y += imgH+4;
+      if(y+imgH > H-16){ doc.addPage(); y=18; }
+      const x = margin + col*(imgW+gap);
+      try{ doc.addImage(p.dataUrl, 'JPEG', x, y, imgW, imgH, undefined, 'FAST'); }catch(err){}
+    });
+    y += imgH + 6;
+  }
+
+  const pageCount = doc.internal.getNumberOfPages();
+  for(let p=1; p<=pageCount; p++){
+    doc.setPage(p);
+    doc.setFont('helvetica','normal'); doc.setFontSize(7); doc.setTextColor(150,155,160);
+    doc.text(RADIUS_FOOTER_LINE, margin, H-11);
+    doc.setFontSize(7.5); doc.setTextColor(140,145,150);
+    doc.text(`Page ${p} of ${pageCount}`, margin, H-6.5);
+  }
+  return doc;
 }
 
 function fmtMoney(v){
@@ -2111,7 +2015,7 @@ async function continueFromCloud(slug, btnEl){
   if(!key) return;
   const hasLocalProgress = Object.keys(state.items).length > 0 || state.meta.project;
   if(hasLocalProgress && state.slug !== slug){
-    if(!confirm('This replaces what\'s currently open on this device with the cloud copy of that job. Anything not yet saved here will be lost. Continue?')) return;
+    if(!confirm("This replaces what's currently open on this device with the cloud copy of that job. Anything not yet saved here will be lost. Continue?")) return;
   }
   if(btnEl){ btnEl.disabled = true; btnEl.textContent = 'Downloading…'; }
   try{
