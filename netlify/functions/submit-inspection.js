@@ -1,1 +1,358 @@
+// Radius Defect Checklist — central record submitter
+//
+// Receives a report file (PDF or summary JSON) from the checklist tool and
+// commits it into a GitHub repo, which acts as the permanent, central,
+// browsable record of every inspection your team completes.
+//
+// AUTHENTICATION — per-person keys, not one shared passphrase:
+//   Each team member is issued their own individual key. Keys and the name
+//   they belong to live in reports/team-keys.json inside the RECORDS repo
+//   (GITHUB_REPO) — not in Netlify's environment variables — so you can add
+//   or revoke someone's access just by editing that one file on GitHub,
+//   with no redeploy needed. Format:
+//
+//   {
+//     "keys": [
+//       { "name": "MG",    "key": "radius-mg-7391",    "active": true },
+//       { "name": "Seb",   "key": "radius-seb-4820",   "active": true }
+//     ]
+//   }
+//
+//   To revoke someone: set their "active" to false (or delete their entry).
+//   Takes effect on their very next submission attempt.
+//
+//   Legacy fallback: if reports/team-keys.json doesn't exist yet and the
+//   old SUBMIT_SECRET environment variable is still set, that shared key
+//   still works (logged as submitter "Unassigned (shared key)").
+//
+// LARGE FILES — chunked upload:
+//   Photo-heavy PDFs can be too big for a single request. The client splits
+//   large files into pieces and sends them as a sequence of requests:
+//     { action: 'chunk', slug, filename, chunkIndex, totalChunks, chunkData }
+//   followed by:
+//     { action: 'finalize', slug, filename, meta, kind, summary, totalChunks }
+//   Chunks are stored temporarily under reports/<slug>/_tmp_<filename>/ and
+//   reassembled into the real file on finalize, then the temp files are
+//   cleaned up. Small files skip this entirely and just send one request
+//   with contentBase64 directly, no action field needed.
+//
+// Required Netlify environment variables:
+//   GITHUB_TOKEN, GITHUB_OWNER, GITHUB_REPO, GITHUB_BRANCH (optional), SUBMIT_SECRET (optional legacy).
+
+const GITHUB_API = 'https://api.github.com';
+const RESEND_API = 'https://api.resend.com/emails';
+
+// Fires the moment a real defect report or site visit lands in the review
+// queue (kind === 'pdf'), so Jason doesn't have to wait for tomorrow's daily
+// digest to know something needs his attention. Best-effort — reuses the
+// same Resend account/from-address as the daily digest. Uses
+// NEW_REPORT_ALERT_EMAIL if set, otherwise falls back to DIGEST_TO_EMAIL so
+// no extra Netlify env var is required if you're happy sharing the address.
+async function sendNewReportAlert(entry) {
+  const resendKey = process.env.RESEND_API_KEY;
+  const fromEmail = process.env.DIGEST_FROM_EMAIL;
+  const toEmail = process.env.NEW_REPORT_ALERT_EMAIL || process.env.DIGEST_TO_EMAIL;
+  if (!resendKey || !fromEmail || !toEmail) {
+    console.log('[submit-inspection] Skipping new-report alert email — RESEND_API_KEY/DIGEST_FROM_EMAIL/DIGEST_TO_EMAIL not fully configured.');
+    return;
+  }
+  const project = (entry.meta && entry.meta.project) || entry.slug;
+  const stage = (entry.meta && entry.meta.stage) || '';
+  const html = `<div style="font-family:sans-serif;color:#222;max-width:560px;">
+    <h3 style="color:#1B2430;">New report waiting for review</h3>
+    <p><b>${project}</b>${stage ? ' — ' + stage : ''}</p>
+    <p>Submitted by ${entry.submittedBy}.</p>
+    <p style="color:#999;font-size:0.85em;margin-top:20px;">Open the Review queue in the checklist tool to view and approve it.</p>
+  </div>`;
+  try {
+    const res = await fetch(RESEND_API, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${resendKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from: fromEmail,
+        to: toEmail.split(',').map(s => s.trim()),
+        subject: `New report to review — ${project}`,
+        html
+      })
+    });
+    if (!res.ok) {
+      console.error('[submit-inspection] New-report alert email failed:', res.status, await res.text());
+    }
+  } catch (err) {
+    console.error('[submit-inspection] New-report alert email error (non-fatal):', err && err.message ? err.message : err);
+  }
+}
+
+exports.handler = async (event) => {
+  const startedAt = Date.now();
+  if (event.httpMethod !== 'POST') {
+    return { statusCode: 405, body: JSON.stringify({ error: 'Method not allowed' }) };
+  }
+
+  const token = process.env.GITHUB_TOKEN;
+  const owner = process.env.GITHUB_OWNER;
+  const repo = process.env.GITHUB_REPO;
+  const branch = process.env.GITHUB_BRANCH || 'main';
+
+  if (!token || !owner || !repo) {
+    return { statusCode: 500, body: JSON.stringify({ error: 'Server is not configured yet. Missing GITHUB_TOKEN, GITHUB_OWNER or GITHUB_REPO environment variable in Netlify.' }) };
+  }
+
+  function ghHeaders() {
+    return {
+      'Authorization': `Bearer ${token}`,
+      'Accept': 'application/vnd.github+json',
+      'Content-Type': 'application/json',
+      'User-Agent': 'radius-defect-checklist-tool'
+    };
+  }
+
+  async function ghGetContent(path) {
+    const res = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/contents/${path}?ref=${branch}`, { headers: ghHeaders() });
+    if (res.status === 200) {
+      const j = await res.json();
+      if (j.content) {
+        return { exists: true, sha: j.sha, content: j.content };
+      }
+      // GitHub only inlines content for files under ~1MB — beyond that this
+      // field comes back empty even though the file exists. Fall back to the
+      // Git blob API, which reliably returns full base64 content regardless
+      // of size (up to 100MB), using the sha the Contents API still gave us.
+      if (j.sha) {
+        const blobRes = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/git/blobs/${j.sha}`, { headers: ghHeaders() });
+        if (blobRes.ok) {
+          const blobJson = await blobRes.json();
+          return { exists: true, sha: j.sha, content: (blobJson.content || '').replace(/\n/g, '') };
+        }
+      }
+      return { exists: true, sha: j.sha, content: '' };
+    }
+    if (res.status === 404) return { exists: false };
+    const t = await res.text();
+    throw new Error(`GitHub GET ${path} failed (${res.status}): ${t}`);
+  }
+
+  async function ghPutContent(path, contentBase64, message, sha) {
+    const res = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/contents/${path}`, {
+      method: 'PUT',
+      headers: ghHeaders(),
+      body: JSON.stringify({ message, content: contentBase64, branch, ...(sha ? { sha } : {}) })
+    });
+    if (!res.ok) {
+      const t = await res.text();
+      throw new Error(`GitHub PUT ${path} failed (${res.status}): ${t}`);
+    }
+    return res.json();
+  }
+
+  async function ghDeleteContent(path, sha, message) {
+    try {
+      await fetch(`${GITHUB_API}/repos/${owner}/${repo}/contents/${path}`, {
+        method: 'DELETE',
+        headers: ghHeaders(),
+        body: JSON.stringify({ message, sha, branch })
+      });
+    } catch (e) {
+      // cleanup best-effort only
+    }
+  }
+
+  const KEYS_PATH = 'reports/team-keys.json';
+
+  async function resolveSubmitter(suppliedKey) {
+    if (!suppliedKey) return { ok: false, reason: 'No key supplied.' };
+    try {
+      const existing = await ghGetContent(KEYS_PATH);
+      if (existing.exists) {
+        const parsed = JSON.parse(Buffer.from(existing.content, 'base64').toString('utf-8'));
+        const match = (parsed.keys || []).find(k => k.key === suppliedKey);
+        if (!match) return { ok: false, reason: 'Key not recognised.' };
+        if (match.active === false) return { ok: false, reason: 'This key has been deactivated.' };
+        return { ok: true, name: match.name };
+      }
+      const legacy = process.env.SUBMIT_SECRET;
+      if (legacy && suppliedKey === legacy) return { ok: true, name: 'Unassigned (shared key)' };
+      return { ok: false, reason: 'Key not recognised.' };
+    } catch (err) {
+      return { ok: false, reason: String(err && err.message ? err.message : err) };
+    }
+  }
+
+  const suppliedKey = event.headers['x-submit-key'] || event.headers['X-Submit-Key'];
+  const auth = await resolveSubmitter(suppliedKey);
+  if (!auth.ok) {
+    return { statusCode: 401, body: JSON.stringify({ error: auth.reason || 'Invalid or missing key.' }) };
+  }
+  const submittedBy = auth.name;
+
+  let payload;
+  try {
+    payload = JSON.parse(event.body);
+  } catch (e) {
+    return { statusCode: 400, body: JSON.stringify({ error: 'Invalid JSON body' }) };
+  }
+
+  const { slug, filename, action } = payload;
+  if (!slug || !filename) {
+    return { statusCode: 400, body: JSON.stringify({ error: 'Missing slug or filename' }) };
+  }
+  const safeSlug = String(slug).replace(/[^a-zA-Z0-9_\-]/g, '-');
+  const safeFilename = String(filename).replace(/[^a-zA-Z0-9_.\-]/g, '-');
+  // Site visits get their own top-level folder, separate from inspection
+  // reports — keeps the two record types from mixing together when listing
+  // either one later.
+  const topLevel = (payload.kind || '').startsWith('site_visit') ? 'site-visits' : 'reports';
+  const finalPath = `${topLevel}/${safeSlug}/${safeFilename}`;
+
+  // ---- Finish writing a fully-assembled file: PUT it, then update registry + ledger ----
+  async function writeReport(contentBase64, meta, kind, summary) {
+    const approxKB = Math.round((contentBase64.length * 0.75) / 1024);
+    console.log(`[submit-inspection] writing ${safeFilename} for ${safeSlug} — approx ${approxKB}KB, kind=${kind}`);
+
+    // registry.json and wip-index.json are meant to stay small, lightweight
+    // lists — the actual photos already live inside the PDF/wip-data.json
+    // files themselves, so there's no need to duplicate a cover photo's
+    // base64 data inside these ledgers too (that's what caused them to
+    // outgrow GitHub's inline-content size and start failing to load).
+    const lightMeta = meta ? { ...meta, coverPhoto: undefined } : meta;
+
+    const existing = await ghGetContent(finalPath);
+    const putJson = await ghPutContent(
+      finalPath, contentBase64,
+      `Inspection record: ${safeSlug}/${safeFilename} (submitted by ${submittedBy})`,
+      existing.exists ? existing.sha : undefined
+    );
+
+    if (kind === 'wip') {
+      try {
+        const wipIndexPath = 'reports/wip-index.json';
+        const wipExisting = await ghGetContent(wipIndexPath);
+        let list = wipExisting.exists ? JSON.parse(Buffer.from(wipExisting.content, 'base64').toString('utf-8')) : [];
+        const now = new Date().toISOString();
+        const idx = list.findIndex(r => r.slug === safeSlug);
+        const entry = { slug: safeSlug, meta: lightMeta || {}, submittedBy, updatedAt: now, path: finalPath };
+        if (idx === -1) list.push(entry); else list[idx] = entry;
+        await ghPutContent(
+          wipIndexPath,
+          Buffer.from(JSON.stringify(list, null, 2), 'utf-8').toString('base64'),
+          `WIP sync: ${safeSlug} (${submittedBy})`,
+          wipExisting.exists ? wipExisting.sha : undefined
+        );
+      } catch (wipErr) {
+        console.error('[submit-inspection] wip-index update failed (non-fatal):', wipErr && wipErr.message ? wipErr.message : wipErr);
+      }
+    }
+
+    if (kind === 'pdf') {
+      try {
+        const regPath = 'reports/registry.json';
+        const regExisting = await ghGetContent(regPath);
+        let list = regExisting.exists ? JSON.parse(Buffer.from(regExisting.content, 'base64').toString('utf-8')) : [];
+        const now = new Date().toISOString();
+        const idx = list.findIndex(r => r.slug === safeSlug);
+        const entry = {
+          slug: safeSlug, meta: lightMeta || {}, submittedBy, summary: summary || {},
+          pdfPath: finalPath, submittedAt: now, status: 'pending', reviewedAt: null, reviewNote: ''
+        };
+        if (idx === -1) list.push(entry); else list[idx] = entry;
+        await ghPutContent(
+          regPath,
+          Buffer.from(JSON.stringify(list, null, 2), 'utf-8').toString('base64'),
+          `Registry: ${safeSlug} pending review (${submittedBy})`,
+          regExisting.exists ? regExisting.sha : undefined
+        );
+        // This write only happens when someone explicitly hits submit (first
+        // time, or resubmitting after changes requested) — never on autosave
+        // — so alerting every time here is correct, not duplicate noise.
+        await sendNewReportAlert(entry);
+      } catch (regErr) {
+        console.error('[submit-inspection] registry update failed (non-fatal):', regErr && regErr.message ? regErr.message : regErr);
+      }
+    }
+
+    if (kind === 'pdf' && meta) {
+      try {
+        const indexPath = 'reports/index.csv';
+        const idxExisting = await ghGetContent(indexPath);
+        const existingCsv = idxExisting.exists
+          ? Buffer.from(idxExisting.content, 'base64').toString('utf-8')
+          : 'submitted_at,submitted_by,project,client,builder,inspector,date,slug,pdf_path\n';
+        const esc = (s) => `"${String(s || '').replace(/"/g, '""')}"`;
+        const row = [
+          new Date().toISOString(), esc(submittedBy),
+          esc(meta.project), esc(meta.client), esc(meta.builder),
+          esc(meta.inspector), esc(meta.date), esc(safeSlug), esc(finalPath)
+        ].join(',') + '\n';
+        await ghPutContent(
+          indexPath, Buffer.from(existingCsv + row, 'utf-8').toString('base64'),
+          `Log: ${safeSlug} (${submittedBy})`, idxExisting.exists ? idxExisting.sha : undefined
+        );
+      } catch (ledgerErr) {
+        console.error('[submit-inspection] ledger update failed (non-fatal):', ledgerErr && ledgerErr.message ? ledgerErr.message : ledgerErr);
+      }
+    }
+
+    return { ok: true, path: finalPath, submittedBy, url: putJson.content && putJson.content.html_url };
+  }
+
+  const tmpDir = `reports/${safeSlug}/_tmp_${safeFilename}`;
+
+  try {
+    // ---- Small file, single request (the common case) ----
+    if (!action) {
+      const { contentBase64, meta, kind } = payload;
+      if (!contentBase64) {
+        return { statusCode: 400, body: JSON.stringify({ error: 'Missing contentBase64' }) };
+      }
+      const result = await writeReport(contentBase64, meta, kind, payload.summary);
+      console.log(`[submit-inspection] success (direct) for ${safeSlug} in ${Date.now() - startedAt}ms`);
+      return { statusCode: 200, body: JSON.stringify(result) };
+    }
+
+    // ---- Large file, part 1: store a chunk temporarily ----
+    if (action === 'chunk') {
+      const { chunkIndex, chunkData } = payload;
+      if (chunkIndex === undefined || chunkData === undefined) {
+        return { statusCode: 400, body: JSON.stringify({ error: 'Missing chunkIndex or chunkData' }) };
+      }
+      const partPath = `${tmpDir}/part_${String(chunkIndex).padStart(5, '0')}.txt`;
+      await ghPutContent(partPath, Buffer.from(chunkData, 'utf-8').toString('base64'), `Chunk ${chunkIndex} for ${safeSlug}/${safeFilename}`);
+      console.log(`[submit-inspection] stored chunk ${chunkIndex} for ${safeSlug} in ${Date.now() - startedAt}ms`);
+      return { statusCode: 200, body: JSON.stringify({ ok: true, chunkIndex }) };
+    }
+
+    // ---- Large file, part 2: reassemble all chunks and finish as normal ----
+    if (action === 'finalize') {
+      const { meta, kind, summary, totalChunks } = payload;
+      if (!totalChunks) {
+        return { statusCode: 400, body: JSON.stringify({ error: 'Missing totalChunks' }) };
+      }
+      let assembled = '';
+      const partShas = [];
+      for (let i = 0; i < totalChunks; i++) {
+        const partPath = `${tmpDir}/part_${String(i).padStart(5, '0')}.txt`;
+        const part = await ghGetContent(partPath);
+        if (!part.exists) {
+          return { statusCode: 400, body: JSON.stringify({ error: `Missing chunk ${i} of ${totalChunks} — try sending the report again from the start.` }) };
+        }
+        assembled += Buffer.from(part.content, 'base64').toString('utf-8');
+        partShas.push({ path: partPath, sha: part.sha });
+      }
+      console.log(`[submit-inspection] reassembled ${totalChunks} chunks for ${safeSlug} (${Math.round(assembled.length * 0.75 / 1024)}KB) in ${Date.now() - startedAt}ms`);
+      const result = await writeReport(assembled, meta, kind, summary);
+      // best-effort cleanup of temp chunk files — not critical if this fails
+      for (const p of partShas) {
+        await ghDeleteContent(p.path, p.sha, `Cleanup chunk for ${safeSlug}/${safeFilename}`);
+      }
+      console.log(`[submit-inspection] success (chunked) for ${safeSlug} in ${Date.now() - startedAt}ms`);
+      return { statusCode: 200, body: JSON.stringify(result) };
+    }
+
+    return { statusCode: 400, body: JSON.stringify({ error: 'Unknown action' }) };
+  } catch (err) {
+    console.error(`[submit-inspection] UNHANDLED ERROR after ${Date.now() - startedAt}ms for ${safeSlug}:`, err && err.stack ? err.stack : err);
+    return { statusCode: 500, body: JSON.stringify({ error: (err && err.message) ? err.message : String(err), where: 'unhandled' }) };
+  }
+};
+
 
