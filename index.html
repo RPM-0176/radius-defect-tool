@@ -491,6 +491,7 @@ const DB_NAME = 'radius_defect_checklist';
 const STORE = 'inspections';
 const SETTINGS_STORE = 'settings';
 const PENDING_SITE_VISITS_STORE = 'pendingSiteVisits';
+const SENT_SITE_VISITS_STORE = 'sentSiteVisits';
 // Some browser states leave `indexedDB` missing entirely rather than
 // throwing a normal error when you try to use it — most commonly Safari
 // in Private Browsing mode, but also some locked-down/managed-device
@@ -512,7 +513,7 @@ function openDB(){
     }
     let req;
     try{
-      req = indexedDB.open(DB_NAME, 3);
+      req = indexedDB.open(DB_NAME, 4);
     }catch(err){
       reject(storageUnavailableError());
       return;
@@ -522,6 +523,7 @@ function openDB(){
       if(!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE, {keyPath:'slug'});
       if(!db.objectStoreNames.contains(SETTINGS_STORE)) db.createObjectStore(SETTINGS_STORE, {keyPath:'key'});
       if(!db.objectStoreNames.contains(PENDING_SITE_VISITS_STORE)) db.createObjectStore(PENDING_SITE_VISITS_STORE, {keyPath:'id'});
+      if(!db.objectStoreNames.contains(SENT_SITE_VISITS_STORE)) db.createObjectStore(SENT_SITE_VISITS_STORE, {keyPath:'slug'});
     };
     req.onsuccess = e => resolve(e.target.result);
     req.onerror = e => reject((e.target && e.target.error) || storageUnavailableError());
@@ -609,6 +611,32 @@ async function dbDeletePendingSiteVisit(id){
   });
 }
 
+// ---------- persisted copy of sent site visits ----------
+// Unlike the pending queue (which only holds visits that haven't sent yet
+// and gets cleared the moment they succeed), this store keeps a copy of
+// every site visit that HAS sent, keyed by slug. That's what makes
+// "changes requested" actionable for site visits: without this, the only
+// copy of the notes/photos would be inside the already-submitted PDF,
+// with no way to load it back into an editable form.
+async function dbPutSentSiteVisit(entry){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const tx = db.transaction(SENT_SITE_VISITS_STORE,'readwrite');
+    tx.objectStore(SENT_SITE_VISITS_STORE).put(entry);
+    tx.oncomplete = ()=>resolve();
+    tx.onerror = e=>reject(e.target.error);
+  });
+}
+async function dbGetSentSiteVisit(slug){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const tx = db.transaction(SENT_SITE_VISITS_STORE,'readonly');
+    const req = tx.objectStore(SENT_SITE_VISITS_STORE).get(slug);
+    req.onsuccess = ()=>resolve(req.result || null);
+    req.onerror = e=>reject(e.target.error);
+  });
+}
+
 // Attempts to send one pending site visit to central. Returns true on
 // success (and removes it from the queue), false on failure (leaves it
 // queued for next time). Never throws — callers can fire-and-forget.
@@ -619,6 +647,7 @@ async function trySendPendingSiteVisit(entry){
     await submitFileToCentral(entry.slug, 'defect-report.pdf', pdfBase64, entry.meta, 'pdf',
       {defects:0,crit:0,maj:0,min:0,na:0,photos:entry.record.photos.length}, entry.key);
     await dbDeletePendingSiteVisit(entry.id);
+    try{ await dbPutSentSiteVisit({slug: entry.slug, meta: entry.meta, key: entry.key, record: entry.record, sentAt: new Date().toISOString()}); }catch(err){}
     return true;
   }catch(err){
     return false;
@@ -1099,6 +1128,10 @@ document.addEventListener('click', async (e)=>{
     document.getElementById('mineModal').classList.remove('show');
   }
   else if(action==='download-mine-pdf'){ downloadMyPdf(t.dataset.slug); }
+  else if(action==='edit-resubmit-site-visit'){
+    document.getElementById('mineModal').classList.remove('show');
+    openSiteVisitModalForEdit(t.dataset.slug);
+  }
   else if(action==='open-wip'){ openWipList(); }
   else if(action==='close-wip-modal'){
     document.getElementById('wipModal').classList.remove('show');
@@ -1675,14 +1708,15 @@ async function submitFileToCentral(slug, filename, contentBase64, meta, kind, su
 }
 
 // ---------- site visit log ----------
-let siteVisitState = { project:'', date:'', loggedBy:'', attendees:'', notes:'', photos:[] };
+let siteVisitState = { project:'', date:'', loggedBy:'', attendees:'', notes:'', photos:[], editingSlug:null };
 
 function openSiteVisitModal(){
   siteVisitState = {
     project: state.meta.project || '',
     date: new Date().toISOString().slice(0,10),
     loggedBy: '', attendees: '', notes: '', photos: [],
-    startedAt: Date.now()
+    startedAt: Date.now(),
+    editingSlug: null
   };
   document.getElementById('sv_project').value = siteVisitState.project;
   document.getElementById('sv_date').value = siteVisitState.date;
@@ -1690,6 +1724,36 @@ function openSiteVisitModal(){
   document.getElementById('sv_attendees').value = '';
   document.getElementById('sv_notes').value = '';
   renderSiteVisitPhotos();
+  const btn = document.querySelector('[data-action="submit-site-visit"]');
+  if(btn) btn.textContent = 'Save site visit';
+  document.getElementById('siteVisitModal').classList.add('show');
+}
+
+// Reopens a previously-sent site visit for editing — used when a reviewer
+// has requested changes. Falls back with a clear explanation if this isn't
+// the device it was originally submitted from, since the notes/photos only
+// live in this device's local storage, not on the server.
+async function openSiteVisitModalForEdit(slug){
+  let entry;
+  try{ entry = await dbGetSentSiteVisit(slug); }catch(err){ entry = null; }
+  if(!entry){
+    alert("Can't load this site visit for editing on this device — it was likely submitted from a different phone. Ask whoever originally logged it to open 'My submissions' on their own device and edit it from there.");
+    return;
+  }
+  const r = entry.record;
+  siteVisitState = {
+    project: r.project || '', date: r.date || new Date().toISOString().slice(0,10),
+    loggedBy: r.loggedBy || '', attendees: r.attendees || '', notes: r.notes || '',
+    photos: r.photos || [], startedAt: Date.now(), editingSlug: slug
+  };
+  document.getElementById('sv_project').value = siteVisitState.project;
+  document.getElementById('sv_date').value = siteVisitState.date;
+  document.getElementById('sv_loggedby').value = siteVisitState.loggedBy;
+  document.getElementById('sv_attendees').value = siteVisitState.attendees;
+  document.getElementById('sv_notes').value = siteVisitState.notes;
+  renderSiteVisitPhotos();
+  const btn = document.querySelector('[data-action="submit-site-visit"]');
+  if(btn) btn.textContent = 'Resubmit site visit';
   document.getElementById('siteVisitModal').classList.add('show');
 }
 
@@ -1720,7 +1784,8 @@ async function submitSiteVisit(){
   const attendees = document.getElementById('sv_attendees').value.trim();
   const notes = document.getElementById('sv_notes').value.trim();
 
-  const slug = slugify(project, date, 'site_visit') + '-' + Math.random().toString(36).slice(2,6);
+  const isEdit = !!siteVisitState.editingSlug;
+  const slug = isEdit ? siteVisitState.editingSlug : (slugify(project, date, 'site_visit') + '-' + Math.random().toString(36).slice(2,6));
   const meta = { project, stage:'site_visit', date, inspector: loggedBy, client:'', builder:'' };
   const durationSeconds = Math.round((Date.now() - (siteVisitState.startedAt||Date.now())) / 1000);
   const record = { project, date, loggedBy, attendees, notes, photos: siteVisitState.photos, durationSeconds };
@@ -1736,7 +1801,7 @@ async function submitSiteVisit(){
   }catch(err){
     // Can't even write to local storage — this is the one case where we
     // still can't guarantee the data is safe, so it's worth a real alert.
-    if(btn){ btn.disabled = false; btn.textContent = 'Save site visit'; }
+    if(btn){ btn.disabled = false; btn.textContent = isEdit ? 'Resubmit site visit' : 'Save site visit'; }
     alert(err && err.isStorageUnavailable ? err.message : "Could not save that site visit on this device. Please try again.");
     return;
   }
@@ -1746,7 +1811,7 @@ async function submitSiteVisit(){
   if(btn){ btn.disabled = false; btn.textContent = 'Save site visit'; }
   document.getElementById('siteVisitModal').classList.remove('show');
   if(sent){
-    showToast('Site visit sent — filed under ' + project + ', awaiting review');
+    showToast((isEdit ? 'Resubmitted — filed under ' : 'Site visit sent — filed under ') + project + ', awaiting review');
   } else {
     showToast("Saved on this device — couldn't send yet, will retry automatically");
   }
@@ -2299,7 +2364,11 @@ function renderMineList(list){
       <div class="proj-actions">
         ${canDownload
           ? `<button class="icon-btn" data-action="download-mine-pdf" data-slug="${rec.slug}">Download approved PDF</button>`
-          : `<span class="empty-hint" style="padding:0;">${rec.status==='changes_requested' ? 'Fix and resubmit from this device.' : 'Waiting on review — check back later.'}</span>`}
+          : rec.status==='changes_requested'
+            ? (rec.meta && rec.meta.stage==='site_visit'
+                ? `<button class="icon-btn" data-action="edit-resubmit-site-visit" data-slug="${rec.slug}">Edit &amp; resubmit</button>`
+                : `<span class="empty-hint" style="padding:0;">Fix and resubmit from this device.</span>`)
+            : `<span class="empty-hint" style="padding:0;">Waiting on review — check back later.</span>`}
         <button class="icon-btn" style="color:#A8461F;" data-action="delete-mine-report" data-slug="${rec.slug}" data-project="${(rec.meta && rec.meta.project || '').replace(/"/g,'&quot;')}">Delete</button>
       </div>
     </div>`;
@@ -2665,5 +2734,4 @@ function exportFullChecklist(){
 </script>
 </body>
 </html>
-
 
